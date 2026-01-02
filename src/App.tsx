@@ -707,9 +707,48 @@ export default function App() {
     };
   }, [activePane, selectedLocal, selectedRemote, localEntries, remoteEntries, remotePath]);
 
+  const formatErrorMessage = (raw: string) => {
+    let text = raw.trim();
+    if (text.startsWith("{") && text.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(text) as { error?: string };
+        if (parsed?.error) {
+          text = String(parsed.error).trim();
+        }
+      } catch {
+        // keep original
+      }
+    }
+
+    if (/^Error:\s*/i.test(text)) {
+      text = text.replace(/^Error:\s*/i, "").trim();
+    }
+
+    if (/getaddrinfo ENOTFOUND/i.test(text)) {
+      const match = text.match(/ENOTFOUND\s+([^\s]+)/i);
+      const host = match?.[1] ? ` (${match[1]})` : "";
+      return `Host not found${host}. Check the server address.`;
+    }
+    if (/ECONNREFUSED/i.test(text)) {
+      return "Connection refused by server. Check host, port, or firewall.";
+    }
+    if (/ETIMEDOUT/i.test(text)) {
+      return "Connection timed out. Check the server address and port.";
+    }
+    if (/ECONNRESET/i.test(text)) {
+      return "Connection reset by server.";
+    }
+    if (/530\b/.test(text) || /login/i.test(text)) {
+      return "Login failed. Check username and password.";
+    }
+
+    return text;
+  };
+
   const addLog = (level: string, message: string) => {
+    const safeMessage = level === "error" ? formatErrorMessage(message) : message;
     setLogs((prev) => [
-      { level, message, timestamp: Date.now() },
+      { level, message: safeMessage, timestamp: Date.now() },
       ...prev.slice(0, 199),
     ]);
   };
