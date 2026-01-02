@@ -267,6 +267,8 @@ type SortOrder = "asc" | "desc";
 
 type ThemeMode = "system" | "light" | "dark";
 
+const freeUploadLimitBytes = 25 * 1024 * 1024;
+
 const viewModeOptions: { value: ViewMode; label: string }[] = [
   { value: "details", label: "Details" },
   { value: "list", label: "List" },
@@ -573,6 +575,14 @@ export default function App() {
     return "system";
   });
   const [isPremium, setIsPremium] = useState(isTauri);
+  const [uploadLimitKbps, setUploadLimitKbps] = useState(() => {
+    const stored = localStorage.getItem("uploadLimitKbps");
+    return stored ? Number(stored) : 0;
+  });
+  const [downloadLimitKbps, setDownloadLimitKbps] = useState(() => {
+    const stored = localStorage.getItem("downloadLimitKbps");
+    return stored ? Number(stored) : 0;
+  });
 
   const [localSearch, setLocalSearch] = useState("");
   const [remoteSearch, setRemoteSearch] = useState("");
@@ -836,10 +846,15 @@ export default function App() {
     }
     const entryMap = new Map(localEntries.map((entry) => [entry.path, entry]));
     const items: TransferItem[] = [];
+    let blocked = 0;
 
     paths.forEach((path) => {
       const entry = entryMap.get(path);
       if (!entry || entry.is_dir) return;
+      if (!isPremium && !isTauri && (entry.size ?? 0) > freeUploadLimitBytes) {
+        blocked += 1;
+        return;
+      }
       const remoteTarget = buildRemotePath(remotePath || "/", entry.name);
       items.push({
         id: createId(),
@@ -857,6 +872,14 @@ export default function App() {
     if (!items.length) {
       addLog("error", "Select local files to upload.");
       return;
+    }
+    if (blocked > 0) {
+      addLog(
+        "info",
+        `Free plan limit: ${blocked} file${blocked === 1 ? "" : "s"} over ${formatBytes(
+          freeUploadLimitBytes
+        )} were skipped.`
+      );
     }
     setQueue((prev) => [...prev, ...items]);
   };
@@ -911,12 +934,19 @@ export default function App() {
     if (!item.file) {
       throw new Error("Missing local file for upload.");
     }
+    if (!isPremium && item.file.size > freeUploadLimitBytes) {
+      throw new Error(`Free plan upload limit is ${formatBytes(freeUploadLimitBytes)}.`);
+    }
     const form = new FormData();
     form.append("host", host);
     form.append("port", String(port));
     form.append("username", username);
     form.append("password", password);
     form.append("remotePath", item.remotePath);
+    form.append("tier", isPremium ? "premium" : "free");
+    if (isPremium && uploadLimitKbps > 0) {
+      form.append("uploadLimitKbps", String(uploadLimitKbps));
+    }
     form.append("file", item.file, item.name);
     const response = await fetch("/api/ftp/upload", {
       method: "POST",
@@ -941,6 +971,8 @@ export default function App() {
         password,
         remotePath: item.remotePath,
         filename: item.name,
+        tier: isPremium ? "premium" : "free",
+        downloadLimitKbps: isPremium ? downloadLimitKbps : 0,
       }),
     });
     if (!response.ok) {
@@ -1862,6 +1894,14 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("uploadLimitKbps", String(uploadLimitKbps));
+  }, [uploadLimitKbps]);
+
+  useEffect(() => {
+    localStorage.setItem("downloadLimitKbps", String(downloadLimitKbps));
+  }, [downloadLimitKbps]);
 
   useEffect(() => {
     if (!detailsItem || detailsItem.scope !== "Local" || !isImageFile(detailsItem.name)) return;
@@ -3166,6 +3206,26 @@ export default function App() {
                     value={themeMode}
                     onChange={(value) => setThemeMode(value as ThemeMode)}
                     sections={[{ options: themeOptions }]}
+                  />
+                </label>
+                <label className={!isPremium ? "disabled" : ""}>
+                  Upload speed (KB/s)
+                  <input
+                    type="number"
+                    min={0}
+                    value={uploadLimitKbps}
+                    onChange={(event) => setUploadLimitKbps(Number(event.target.value))}
+                    disabled={!isPremium}
+                  />
+                </label>
+                <label className={!isPremium ? "disabled" : ""}>
+                  Download speed (KB/s)
+                  <input
+                    type="number"
+                    min={0}
+                    value={downloadLimitKbps}
+                    onChange={(event) => setDownloadLimitKbps(Number(event.target.value))}
+                    disabled={!isPremium}
                   />
                 </label>
                 <label className="checkbox-field">

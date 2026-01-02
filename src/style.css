@@ -1507,6 +1507,14 @@ button:focus-visible {
   font-size: 0.85rem;
 }
 
+.modal-form label.disabled {
+  opacity: 0.6;
+}
+
+.modal-form label.disabled input {
+  cursor: not-allowed;
+}
+
 .modal-title {
   font-weight: 700;
   font-size: 1.1rem;
