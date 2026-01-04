@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/api/dialog";
@@ -302,19 +302,36 @@ const themeOptions: { value: ThemeMode; label: string }[] = [
   { value: "dark", label: "Dark" },
 ];
 
+const apiBase = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
+
+const shouldFallbackToSftp = (message: string) =>
+  /ENOTFOUND|10060|Failed to establish connection|Invalid response: \[227\]|425|ETIMEDOUT/i.test(
+    message
+  );
+
 const ftpRequest = async <T,>(endpoint: string, body: Record<string, unknown>) => {
-  const response = await fetch(`/api/ftp/${endpoint}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || response.statusText);
+  const send = async (payload: Record<string, unknown>) => {
+    const response = await fetch(`${apiBase}/api/ftp/${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return (await response.json()) as T;
+  };
+
+  try {
+    return await send(body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!shouldFallbackToSftp(message)) throw error;
+    return await send({ ...body, protocol: "sftp", sftpPort: 22 });
   }
-  return (await response.json()) as T;
 };
 
 const openLink = (url: string) => {
@@ -520,6 +537,8 @@ const toLocalFileId = (file: File) =>
 export default function App() {
   const [host, setHost] = useState("");
   const [port, setPort] = useState(21);
+  const [protocol, setProtocol] = useState<"ftp" | "sftp">("ftp");
+  const [sftpPort, setSftpPort] = useState(22);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [connected, setConnected] = useState(false);
@@ -553,6 +572,10 @@ export default function App() {
   const [ftpBookmarkOpen, setFtpBookmarkOpen] = useState(false);
   const ftpBookmarkRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragPayloadRef = useRef<DragPayload | null>(null);
+  const localPaneRef = useRef<HTMLDivElement | null>(null);
+  const remotePaneRef = useRef<HTMLDivElement | null>(null);
+  const [softDragTarget, setSoftDragTarget] = useState<"local" | "remote" | null>(null);
   const [menuOpen, setMenuOpen] = useState<"file" | "edit" | "view" | "help" | null>(null);
   const menuCloseRef = useRef<number | null>(null);
   const [openOnStartup, setOpenOnStartup] = useState(() => {
@@ -774,6 +797,8 @@ export default function App() {
             username,
             password,
             path: path ?? null,
+            protocol,
+            sftpPort,
           });
       setRemoteEntries(response.entries);
       setRemotePath(response.cwd || "/");
@@ -937,55 +962,81 @@ export default function App() {
     if (!isPremium && item.file.size > freeUploadLimitBytes) {
       throw new Error(`Free plan upload limit is ${formatBytes(freeUploadLimitBytes)}.`);
     }
-    const form = new FormData();
-    form.append("host", host);
-    form.append("port", String(port));
-    form.append("username", username);
-    form.append("password", password);
-    form.append("remotePath", item.remotePath);
-    form.append("tier", isPremium ? "premium" : "free");
-    if (isPremium && uploadLimitKbps > 0) {
-      form.append("uploadLimitKbps", String(uploadLimitKbps));
-    }
-    form.append("file", item.file, item.name);
-    const response = await fetch("/api/ftp/upload", {
-      method: "POST",
-      body: form,
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || response.statusText);
+    const send = async (protocolOverride?: "ftp" | "sftp") => {
+      const actualProtocol = protocolOverride ?? protocol;
+      const form = new FormData();
+      form.append("host", host);
+      form.append("port", String(port));
+      form.append("username", username);
+      form.append("password", password);
+      form.append("remotePath", item.remotePath);
+      form.append("protocol", actualProtocol);
+      form.append("sftpPort", String(sftpPort));
+      form.append("tier", isPremium ? "premium" : "free");
+      if (isPremium && uploadLimitKbps > 0) {
+        form.append("uploadLimitKbps", String(uploadLimitKbps));
+      }
+      form.append("file", item.file, item.name);
+      const response = await fetch(`${apiBase}/api/ftp/upload`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+    };
+
+    try {
+      await send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!shouldFallbackToSftp(message)) throw error;
+      await send("sftp");
     }
   };
 
   const downloadWebTransfer = async (item: TransferItem) => {
-    const response = await fetch("/api/ftp/download", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        host,
-        port,
-        username,
-        password,
-        remotePath: item.remotePath,
-        filename: item.name,
-        tier: isPremium ? "premium" : "free",
-        downloadLimitKbps: isPremium ? downloadLimitKbps : 0,
-      }),
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || response.statusText);
+    const send = async (protocolOverride?: "ftp" | "sftp") => {
+      const actualProtocol = protocolOverride ?? protocol;
+      const response = await fetch(`${apiBase}/api/ftp/download`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          host,
+          port,
+          username,
+          password,
+          remotePath: item.remotePath,
+          filename: item.name,
+          tier: isPremium ? "premium" : "free",
+          downloadLimitKbps: isPremium ? downloadLimitKbps : 0,
+          protocol: actualProtocol,
+          sftpPort: actualProtocol === "sftp" ? sftpPort : undefined,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = item.name;
+      link.click();
+      URL.revokeObjectURL(url);
+    };
+
+    try {
+      await send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!shouldFallbackToSftp(message)) throw error;
+      await send("sftp");
     }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = item.name;
-    link.click();
-    URL.revokeObjectURL(url);
   };
   useEffect(() => {
     if (!isTauri) {
@@ -1350,6 +1401,10 @@ export default function App() {
   }, [activeTransferId, queue, host, port, username, password]);
 
   const handleConnect = async () => {
+    if (isTauri && protocol === "sftp") {
+      addLog("error", "SFTP is available in the web app only.");
+      return;
+    }
     if (!host) {
       addLog("error", "Host is required.");
       return;
@@ -1371,6 +1426,8 @@ export default function App() {
             port,
             username,
             password,
+            protocol,
+            sftpPort,
           });
       setConnected(true);
       setRemotePath(response.cwd || "/");
@@ -1577,6 +1634,8 @@ export default function App() {
               username,
               password,
               path: target,
+              protocol,
+              sftpPort,
             });
           }
           await refreshRemote();
@@ -1616,6 +1675,8 @@ export default function App() {
               password,
               from,
               to,
+              protocol,
+              sftpPort,
             });
           }
           await refreshRemote();
@@ -1642,6 +1703,8 @@ export default function App() {
               password,
               path: target,
               is_dir: modal.isDir,
+              protocol,
+              sftpPort,
             });
           }
           await refreshRemote();
@@ -1698,7 +1761,11 @@ export default function App() {
 
   const handleDropRemote = (event: React.DragEvent) => {
     event.preventDefault();
-    const payload = parseDragPayload(event);
+    const payload = parseDragPayload(event) ?? dragPayloadRef.current;
+    dragPayloadRef.current = null;
+    if (isTauri && import.meta.env.DEV) {
+      addLog("info", payload ? `Drop remote (${payload.source})` : "Drop remote (no payload)");
+    }
     if (!payload || payload.source !== "local") {
       if (!isTauri && event.dataTransfer.files?.length) {
         const files = Array.from(event.dataTransfer.files);
@@ -1712,7 +1779,11 @@ export default function App() {
 
   const handleDropLocal = (event: React.DragEvent) => {
     event.preventDefault();
-    const payload = parseDragPayload(event);
+    const payload = parseDragPayload(event) ?? dragPayloadRef.current;
+    dragPayloadRef.current = null;
+    if (isTauri && import.meta.env.DEV) {
+      addLog("info", payload ? `Drop local (${payload.source})` : "Drop local (no payload)");
+    }
     if (!payload || payload.source !== "remote") {
       if (!isTauri && event.dataTransfer.files?.length) {
         const files = Array.from(event.dataTransfer.files);
@@ -1824,6 +1895,53 @@ export default function App() {
     detailsPanePosition === "bottom" ? "workspace details-bottom" : "workspace details-right";
 
   const selectedFtp = ftpBookmarks.find((item) => item.name === selectedFtpBookmark) ?? null;
+
+  const getSoftDropTarget = (clientX: number, clientY: number) => {
+    const isInside = (ref: React.RefObject<HTMLDivElement>) => {
+      const el = ref.current;
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      return (
+        clientX >= rect.left &&
+        clientX <= rect.right &&
+        clientY >= rect.top &&
+        clientY <= rect.bottom
+      );
+    };
+    if (isInside(remotePaneRef)) return "remote";
+    if (isInside(localPaneRef)) return "local";
+    return null;
+  };
+
+  const startSoftDrag = (payload: DragPayload, event: React.PointerEvent) => {
+    if (!isTauri) return;
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button")) return;
+    event.preventDefault();
+    dragPayloadRef.current = payload;
+    setSoftDragTarget(null);
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const target = getSoftDropTarget(moveEvent.clientX, moveEvent.clientY);
+      setSoftDragTarget(target);
+    };
+
+    const handleUp = (upEvent: PointerEvent) => {
+      const target = getSoftDropTarget(upEvent.clientX, upEvent.clientY);
+      setSoftDragTarget(null);
+      if (payload.source === "local" && target === "remote") {
+        enqueueUploadPaths(payload.paths);
+      }
+      if (payload.source === "remote" && target === "local") {
+        enqueueDownloadNames(payload.paths).catch(() => null);
+      }
+      dragPayloadRef.current = null;
+      window.removeEventListener("pointermove", handleMove);
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
+  };
 
   useEffect(() => {
     if (!ftpBookmarkOpen) return;
@@ -1951,14 +2069,22 @@ export default function App() {
   return (
     <div
       className="app explorer"
-      onDragEnter={(event) => {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
-      }}
-      onDragOver={(event) => {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
-      }}
+      onDragEnter={
+        isTauri
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+            }
+      }
+      onDragOver={
+        isTauri
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+            }
+      }
     >
       <header className="topbar explorer-topbar">
         <div className="menu-bar">
@@ -2223,6 +2349,35 @@ export default function App() {
               />
             </label>
             <label>
+              Protocol
+              <select
+                value={protocol}
+                onChange={(event) => {
+                  const value = event.target.value as "ftp" | "sftp";
+                  if (isTauri && value === "sftp") {
+                    addLog("error", "SFTP is available in the web app only.");
+                    return;
+                  }
+                  setProtocol(value);
+                }}
+              >
+                <option value="ftp">FTP</option>
+                <option value="sftp" disabled={isTauri}>
+                  SFTP (web)
+                </option>
+              </select>
+            </label>
+            {protocol === "sftp" && !isTauri ? (
+              <label>
+                SFTP Port
+                <input
+                  type="number"
+                  value={sftpPort}
+                  onChange={(event) => setSftpPort(Number(event.target.value))}
+                />
+              </label>
+            ) : null}
+            <label>
               Username
               <input
                 value={username}
@@ -2443,7 +2598,30 @@ export default function App() {
 
         <section className={detailsPaneClass}>
           <section className="panes explorer-panes">
-            <div className="pane" onDragOver={(event) => event.preventDefault()} onDrop={handleDropLocal}>
+            <div
+              ref={localPaneRef}
+              className={`pane ${softDragTarget === "local" ? "soft-drop" : ""}`}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              onDragOverCapture={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              onDropCapture={(event) => {
+                event.preventDefault();
+                handleDropLocal(event);
+              }}
+              onDrop={handleDropLocal}
+            >
               <div className="pane-header explorer-header">
                 <div className="pane-title-row">
                   <div>
@@ -2509,7 +2687,14 @@ export default function App() {
                 ) : null}
               </div>
 
-              <div className={`pane-body view-${viewMode}`}>
+              <div
+                className={`pane-body view-${viewMode}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "copy";
+                }}
+                onDrop={handleDropLocal}
+              >
                 {viewMode === "details" ? (
                   <>
                     <div className="table-row table-head">
@@ -2529,12 +2714,16 @@ export default function App() {
                           <div
                             key={entry.path}
                             className={`table-row ${isSelected ? "selected" : ""}`}
-                            draggable
+                            draggable={!isTauri}
                             onDragStart={(event) => {
                               const payload: DragPayload = {
                                 source: "local",
                                 paths: isSelected ? selectedLocal : [entry.path],
                               };
+                              dragPayloadRef.current = payload;
+                              if (isTauri && import.meta.env.DEV) {
+                                addLog("info", `Drag start local (${payload.paths.length})`);
+                              }
                               event.dataTransfer.setData(
                                 "application/json",
                                 JSON.stringify(payload)
@@ -2543,13 +2732,26 @@ export default function App() {
                                 "text/plain",
                                 payload.paths.join("\n")
                               );
-                              event.dataTransfer.setData(
-                                "text/uri-list",
-                                payload.paths.map(toFileUri).join("\n")
+                              if (!isTauri) {
+                                event.dataTransfer.setData(
+                                  "text/uri-list",
+                                  payload.paths.map(toFileUri).join("\n")
+                                );
+                              }
+                              event.dataTransfer.effectAllowed = "copy";
+                              event.dataTransfer.dropEffect = "copy";
+                            }}
+                            onPointerDown={(event) => {
+                              startSoftDrag(
+                                {
+                                  source: "local",
+                                  paths: isSelected ? selectedLocal : [entry.path],
+                                },
+                                event
                               );
-                              event.dataTransfer.dropEffect = "copy";
-                              event.dataTransfer.effectAllowed = "copyMove";
-                              event.dataTransfer.dropEffect = "copy";
+                            }}
+                            onDragEnd={() => {
+                              dragPayloadRef.current = null;
                             }}
                             onClick={(event) => {
                               setActivePane("local");
@@ -2677,24 +2879,41 @@ export default function App() {
                           className={`entry-card ${layoutClass} ${
                             isSelected ? "selected" : ""
                           }`}
-                          draggable
+                          draggable={!isTauri}
                           onDragStart={(event) => {
                             const payload: DragPayload = {
                               source: "local",
                               paths: isSelected ? selectedLocal : [entry.path],
                             };
+                            dragPayloadRef.current = payload;
+                            if (isTauri && import.meta.env.DEV) {
+                              addLog("info", `Drag start local (${payload.paths.length})`);
+                            }
                             event.dataTransfer.setData("application/json", JSON.stringify(payload));
                             event.dataTransfer.setData(
                               "text/plain",
                               payload.paths.join("\n")
                             );
-                            event.dataTransfer.setData(
-                              "text/uri-list",
-                              payload.paths.map(toFileUri).join("\n")
+                            if (!isTauri) {
+                              event.dataTransfer.setData(
+                                "text/uri-list",
+                                payload.paths.map(toFileUri).join("\n")
+                              );
+                            }
+                            event.dataTransfer.effectAllowed = "copy";
+                            event.dataTransfer.dropEffect = "copy";
+                          }}
+                          onPointerDown={(event) => {
+                            startSoftDrag(
+                              {
+                                source: "local",
+                                paths: isSelected ? selectedLocal : [entry.path],
+                              },
+                              event
                             );
-                            event.dataTransfer.dropEffect = "copy";
-                            event.dataTransfer.effectAllowed = "copyMove";
-                            event.dataTransfer.dropEffect = "copy";
+                          }}
+                          onDragEnd={() => {
+                            dragPayloadRef.current = null;
                           }}
                           onClick={(event) => {
                             setActivePane("local");
@@ -2838,7 +3057,30 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="pane" onDragOver={(event) => event.preventDefault()} onDrop={handleDropRemote}>
+            <div
+              ref={remotePaneRef}
+              className={`pane ${softDragTarget === "remote" ? "soft-drop" : ""}`}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              onDragOverCapture={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              onDropCapture={(event) => {
+                event.preventDefault();
+                handleDropRemote(event);
+              }}
+              onDrop={handleDropRemote}
+            >
               <div className="pane-header explorer-header">
                 <div className="pane-title-row">
                   <div>
@@ -2883,7 +3125,14 @@ export default function App() {
                 </div>
               </div>
 
-              <div className={`pane-body view-${viewMode}`}>
+              <div
+                className={`pane-body view-${viewMode}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "copy";
+                }}
+                onDrop={handleDropRemote}
+              >
                 {viewMode === "details" ? (
                   <>
                     <div className="table-row table-head">
@@ -2904,7 +3153,7 @@ export default function App() {
                           <div
                             key={entry.name}
                             className={`table-row ${isSelected ? "selected" : ""}`}
-                            draggable={!entry.is_dir}
+                            draggable={!isTauri && !entry.is_dir}
                             onDragStart={(event) => {
                               const payload: DragPayload = {
                                 source: "remote",
@@ -2915,6 +3164,16 @@ export default function App() {
                                 JSON.stringify(payload)
                               );
                               event.dataTransfer.effectAllowed = "copy";
+                            }}
+                            onPointerDown={(event) => {
+                              if (entry.is_dir) return;
+                              startSoftDrag(
+                                {
+                                  source: "remote",
+                                  paths: isSelected ? selectedRemote : [entry.name],
+                                },
+                                event
+                              );
                             }}
                             onClick={(event) => {
                               setActivePane("remote");
@@ -3014,7 +3273,7 @@ export default function App() {
                           className={`entry-card ${layoutClass} ${
                             isSelected ? "selected" : ""
                           }`}
-                          draggable={!entry.is_dir}
+                          draggable={!isTauri && !entry.is_dir}
                           onDragStart={(event) => {
                             const payload: DragPayload = {
                               source: "remote",
@@ -3022,6 +3281,16 @@ export default function App() {
                             };
                             event.dataTransfer.setData("application/json", JSON.stringify(payload));
                             event.dataTransfer.effectAllowed = "copy";
+                          }}
+                          onPointerDown={(event) => {
+                            if (entry.is_dir) return;
+                            startSoftDrag(
+                              {
+                                source: "remote",
+                                paths: isSelected ? selectedRemote : [entry.name],
+                              },
+                              event
+                            );
                           }}
                           onClick={(event) => {
                             setActivePane("remote");
@@ -3273,3 +3542,11 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+

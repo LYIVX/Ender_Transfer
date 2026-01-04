@@ -1,7 +1,19 @@
 const path = require("path");
-const { readJson, buildConfig, withClient, createThrottleStream } = require("./_client");
+const {
+  readJson,
+  buildConfig,
+  buildSftpConfig,
+  withClient,
+  withSftpClient,
+  createThrottleStream,
+  shouldFallbackToSftp,
+  setCors,
+  handleOptions,
+} = require("./_client");
 
 module.exports = async (req, res) => {
+  if (handleOptions(req, res)) return;
+  setCors(res);
   if (req.method !== "POST") {
     res.statusCode = 405;
     res.end("Method Not Allowed");
@@ -23,7 +35,28 @@ module.exports = async (req, res) => {
       throttle.pipe(res);
     }
     const target = throttle ?? res;
-    await withClient(config, (client) => client.downloadTo(target, remotePath));
+    const downloadFtp = async () =>
+      withClient(config, (client) => client.downloadTo(target, remotePath));
+    const downloadSftp = async () =>
+      withSftpClient(buildSftpConfig(payload), (client) => {
+        const readStream = client.createReadStream(remotePath);
+        return new Promise((resolve, reject) => {
+          readStream.on("error", reject);
+          res.on("close", resolve);
+          res.on("finish", resolve);
+          readStream.pipe(target);
+        });
+      });
+    if (payload.protocol === "sftp") {
+      await downloadSftp();
+    } else {
+      try {
+        await downloadFtp();
+      } catch (error) {
+        if (!shouldFallbackToSftp(error)) throw error;
+        await downloadSftp();
+      }
+    }
   } catch (error) {
     res.statusCode = 500;
     res.setHeader("Content-Type", "application/json");

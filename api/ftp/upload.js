@@ -1,9 +1,19 @@
 const Busboy = require("busboy");
-const { buildConfig, withClient, createThrottleStream } = require("./_client");
+const {
+  buildConfig,
+  buildSftpConfig,
+  withClient,
+  withSftpClient,
+  createThrottleStream,
+  setCors,
+  handleOptions,
+} = require("./_client");
 
 const freeUploadLimitBytes = 25 * 1024 * 1024;
 
 module.exports = async (req, res) => {
+  if (handleOptions(req, res)) return;
+  setCors(res);
   if (req.method !== "POST") {
     res.statusCode = 405;
     res.end("Method Not Allowed");
@@ -65,7 +75,14 @@ module.exports = async (req, res) => {
         : 0;
       const throttle = createThrottleStream(limitKbps * 1024);
       const sourceStream = throttle ? fileStream.pipe(throttle) : fileStream;
-      await withClient(config, (client) => client.uploadFrom(sourceStream, remotePath));
+
+      if (payload.protocol === "sftp") {
+        await withSftpClient(buildSftpConfig(payload), (client) =>
+          client.put(sourceStream, remotePath)
+        );
+      } else {
+        await withClient(config, (client) => client.uploadFrom(sourceStream, remotePath));
+      }
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ ok: true }));
     } catch (error) {
