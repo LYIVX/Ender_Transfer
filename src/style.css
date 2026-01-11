@@ -2,6 +2,7 @@
 @import "@fontsource/space-grotesk/500.css";
 @import "@fontsource/space-grotesk/600.css";
 @import "@fontsource/space-grotesk/700.css";
+@import "@enderfall/ui/styles.css";
 
 :root {
   font-family: "Space Grotesk", "Segoe UI", sans-serif;

@@ -3,6 +3,8 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/api/dialog";
 import { open as openExternal } from "@tauri-apps/api/shell";
+import { isEntitledForApp, openAppBrowser, readLaunchToken } from "@enderfall/runtime";
+import { AccessGate, applyTheme, getStoredTheme } from "@enderfall/ui";
 const IconLock = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" />
@@ -145,6 +147,7 @@ import {
 } from "@tauri-apps/api/path";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_IPC__" in window;
+const appId = "ftp-browser";
 
 type FtpEntry = {
   name: string;
@@ -590,13 +593,17 @@ export default function App() {
     const stored = localStorage.getItem("closeToTray");
     return stored === "true";
   });
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
-    const stored = localStorage.getItem("themeMode");
-    if (stored === "light" || stored === "dark" || stored === "system") {
-      return stored;
-    }
-    return "system";
-  });
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
+    getStoredTheme({
+      storageKey: "themeMode",
+      defaultTheme: "system",
+      allowed: ["system", "light", "dark"],
+    })
+  );
+  const [entitlementStatus, setEntitlementStatus] = useState<"checking" | "allowed" | "locked">(
+    isTauri ? "checking" : "allowed"
+  );
+  const [requestedBrowser, setRequestedBrowser] = useState(false);
   const [isPremium, setIsPremium] = useState(isTauri);
   const [uploadLimitKbps, setUploadLimitKbps] = useState(() => {
     const stored = localStorage.getItem("uploadLimitKbps");
@@ -607,10 +614,44 @@ export default function App() {
     return stored ? Number(stored) : 0;
   });
 
+  useEffect(() => {
+    applyTheme(themeMode, {
+      storageKey: "themeMode",
+      defaultTheme: "system",
+      allowed: ["system", "light", "dark"],
+    });
+  }, [themeMode]);
+
   const [localSearch, setLocalSearch] = useState("");
   const [remoteSearch, setRemoteSearch] = useState("");
   const [localAddress, setLocalAddress] = useState(isTauri ? "This PC" : "Browser files");
   const [remoteAddress, setRemoteAddress] = useState("/");
+
+  const refreshEntitlement = async () => {
+    if (!isTauri) {
+      setEntitlementStatus("allowed");
+      setIsPremium(true);
+      return;
+    }
+    const token = await readLaunchToken(appId);
+    const allowed = isEntitledForApp(token, appId);
+    setEntitlementStatus(allowed ? "allowed" : "locked");
+    setIsPremium(allowed);
+  };
+
+  useEffect(() => {
+    refreshEntitlement();
+  }, []);
+
+  useEffect(() => {
+    if (entitlementStatus !== "locked" || requestedBrowser) return;
+    setRequestedBrowser(true);
+    handleOpenAppBrowser();
+  }, [entitlementStatus, requestedBrowser]);
+
+  const handleOpenAppBrowser = async () => {
+    await openAppBrowser(appId);
+  };
 
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [activePane, setActivePane] = useState<"local" | "remote">("local");
@@ -2087,6 +2128,15 @@ export default function App() {
             }
       }
     >
+      <AccessGate
+        status={entitlementStatus}
+        primaryLabel="Open App Browser"
+        secondaryLabel="Retry"
+        onPrimary={handleOpenAppBrowser}
+        onSecondary={refreshEntitlement}
+        primaryClassName="primary"
+        secondaryClassName="ghost"
+      />
       <header className="topbar explorer-topbar">
         <div className="menu-bar">
           <div

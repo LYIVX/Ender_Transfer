@@ -18,6 +18,8 @@
   "dependencies": {
     "@fontsource/space-grotesk": "^5.2.6",
     "@tauri-apps/api": "^1.5.0",
+    "@enderfall/runtime": "workspace:*",
+    "@enderfall/ui": "workspace:*",
     "basic-ftp": "^5.0.5",
     "busboy": "^1.6.0",
     "react": "^18.3.1",

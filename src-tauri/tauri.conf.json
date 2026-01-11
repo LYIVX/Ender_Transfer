@@ -6,7 +6,7 @@
     "distDir": "../dist"
   },
   "package": {
-    "productName": "FTPBrowser",
+    "productName": "Ender Transfer",
     "version": "0.1.0"
   },
   "tauri": {
@@ -28,7 +28,7 @@
     },
     "windows": [
       {
-        "title": "FTP Browser",
+        "title": "Ender Transfer",
         "width": 1200,
         "height": 760,
         "minWidth": 980,

@@ -825,6 +825,18 @@ fn path_exists(path: String) -> bool {
 }
 
 #[tauri::command]
+fn launch_path(path: String) -> Result<(), String> {
+  let target = Path::new(&path);
+  if !target.exists() {
+    return Err("File not found.".to_string());
+  }
+  std::process::Command::new(target)
+    .spawn()
+    .map_err(map_err)?;
+  Ok(())
+}
+
+#[tauri::command]
 fn get_env(key: String) -> Option<String> {
   std::env::var(key).ok()
 }
@@ -1107,6 +1119,7 @@ fn main() {
       delete_local,
       rename_local,
       path_exists,
+      launch_path,
       get_env,
       is_local_dir,
       read_local_image_data,
