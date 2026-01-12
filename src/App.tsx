@@ -1,10 +1,17 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/api/dialog";
 import { open as openExternal } from "@tauri-apps/api/shell";
-import { isEntitledForApp, openAppBrowser, readLaunchToken } from "@enderfall/runtime";
-import { AccessGate, applyTheme, getStoredTheme } from "@enderfall/ui";
+import { appWindow } from "@tauri-apps/api/window";
+import {
+  clearLaunchToken,
+  isEntitledForApp,
+  openAppBrowser,
+  readLaunchToken,
+  type LaunchToken,
+} from "@enderfall/runtime";
+import { AccessGate, Button, Dropdown, Input, MainHeader, Panel, applyTheme, getStoredTheme } from "@enderfall/ui";
 const IconLock = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" />
@@ -70,72 +77,6 @@ const IconChevronDown = () => (
   </svg>
 );
 
-type DropdownOption = { value: string; label: string };
-type DropdownSection = { label?: string; options: DropdownOption[] };
-
-const Dropdown = ({
-  value,
-  onChange,
-  sections,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  sections: DropdownSection[];
-}) => {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-  const active =
-    sections.flatMap((section) => section.options).find((item) => item.value === value) ??
-    sections[0]?.options[0];
-
-  useEffect(() => {
-    if (!open) return;
-    const handlePointer = (event: PointerEvent) => {
-      if (!ref.current) return;
-      if (ref.current.contains(event.target as Node)) return;
-      setOpen(false);
-    };
-    window.addEventListener("pointerdown", handlePointer);
-    return () => window.removeEventListener("pointerdown", handlePointer);
-  }, [open]);
-
-  return (
-    <div className="bookmark-dropdown" ref={ref}>
-      <button
-        className="bookmark-trigger"
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-      >
-        <span className="bookmark-text">{active?.label ?? "Select"}</span>
-        <span className="bookmark-caret">
-          <IconChevronDown />
-        </span>
-      </button>
-      {open ? (
-        <div className="bookmark-menu">
-          {sections.map((section) => (
-            <div key={section.label ?? "options"}>
-              {section.label ? <div className="bookmark-group">{section.label}</div> : null}
-              {section.options.map((item) => (
-                <button
-                  key={item.value}
-                  className="bookmark-item"
-                  type="button"
-                  onClick={() => {
-                    onChange(item.value);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="bookmark-text">{item.label}</span>
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-};
 import {
   desktopDir,
   dirname,
@@ -268,7 +209,7 @@ type SortBy =
 
 type SortOrder = "asc" | "desc";
 
-type ThemeMode = "system" | "light" | "dark";
+type ThemeMode = "galaxy" | "system" | "light" | "dark";
 
 const freeUploadLimitBytes = 25 * 1024 * 1024;
 
@@ -300,6 +241,7 @@ const sortMoreOptions: { value: SortBy; label: string }[] = [
 ];
 
 const themeOptions: { value: ThemeMode; label: string }[] = [
+  { value: "galaxy", label: "Galaxy" },
   { value: "system", label: "System" },
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
@@ -572,8 +514,6 @@ export default function App() {
   const [modal, setModal] = useState<ModalState | null>(null);
   const [modalValue, setModalValue] = useState("");
   const [savePassword, setSavePassword] = useState(false);
-  const [ftpBookmarkOpen, setFtpBookmarkOpen] = useState(false);
-  const ftpBookmarkRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragPayloadRef = useRef<DragPayload | null>(null);
   const localPaneRef = useRef<HTMLDivElement | null>(null);
@@ -596,8 +536,8 @@ export default function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
     getStoredTheme({
       storageKey: "themeMode",
-      defaultTheme: "system",
-      allowed: ["system", "light", "dark"],
+      defaultTheme: "galaxy",
+      allowed: ["galaxy", "system", "light", "dark"],
     })
   );
   const [entitlementStatus, setEntitlementStatus] = useState<"checking" | "allowed" | "locked">(
@@ -605,6 +545,8 @@ export default function App() {
   );
   const [requestedBrowser, setRequestedBrowser] = useState(false);
   const [isPremium, setIsPremium] = useState(isTauri);
+  const [entitlementDebug, setEntitlementDebug] = useState<string>("");
+  const [launchToken, setLaunchToken] = useState<LaunchToken | null>(null);
   const [uploadLimitKbps, setUploadLimitKbps] = useState(() => {
     const stored = localStorage.getItem("uploadLimitKbps");
     return stored ? Number(stored) : 0;
@@ -617,9 +559,10 @@ export default function App() {
   useEffect(() => {
     applyTheme(themeMode, {
       storageKey: "themeMode",
-      defaultTheme: "system",
-      allowed: ["system", "light", "dark"],
+      defaultTheme: "galaxy",
+      allowed: ["galaxy", "system", "light", "dark"],
     });
+    document.body.classList.toggle("ef-galaxy", themeMode === "galaxy");
   }, [themeMode]);
 
   const [localSearch, setLocalSearch] = useState("");
@@ -634,9 +577,17 @@ export default function App() {
       return;
     }
     const token = await readLaunchToken(appId);
+    console.log("[Ender Transfer] launch token", token);
+    setLaunchToken(token);
     const allowed = isEntitledForApp(token, appId);
     setEntitlementStatus(allowed ? "allowed" : "locked");
     setIsPremium(allowed);
+    const now = Date.now();
+    const expires = token?.expiresAt ?? 0;
+    const debug = token
+      ? `token ${token.appId} exp ${new Date(expires).toLocaleString()} (${expires - now}ms)`
+      : "no token found";
+    setEntitlementDebug(debug);
   };
 
   useEffect(() => {
@@ -650,7 +601,32 @@ export default function App() {
   }, [entitlementStatus, requestedBrowser]);
 
   const handleOpenAppBrowser = async () => {
+    console.log("[Ender Transfer] open Enderfall Hub");
     await openAppBrowser(appId);
+  };
+
+  const openProfile = () => {
+    const url = "https://enderfall.co.uk/profile";
+    if (isTauri) {
+      openExternal(url);
+    } else {
+      window.open(url, "_blank", "noopener");
+    }
+  };
+
+  const focusSelf = async () => {
+    if (!isTauri) return;
+    await appWindow.show();
+    await appWindow.setFocus();
+  };
+
+  const handleLogout = async () => {
+    await clearLaunchToken(appId);
+    setLaunchToken(null);
+    setEntitlementStatus("locked");
+    setIsPremium(false);
+    setEntitlementDebug("logged out");
+    await handleOpenAppBrowser();
   };
 
   const [favorites, setFavorites] = useState<Favorite[]>([]);
@@ -683,6 +659,12 @@ export default function App() {
     () => queue.find((item) => item.status === "active"),
     [queue]
   );
+
+  const displayName =
+    launchToken?.displayName || launchToken?.email?.split("@")[0] || "Account";
+  const rawAvatarUrl = launchToken?.avatarUrl ?? null;
+  const avatarUrl =
+    rawAvatarUrl && !rawAvatarUrl.includes("googleusercontent.com") ? rawAvatarUrl : null;
 
   const filteredLocalEntries = useMemo(() => {
     const query = localSearch.trim().toLowerCase();
@@ -1512,7 +1494,6 @@ export default function App() {
     setUsername(selected.username);
     setPassword(selected.password ?? "");
     setSavePassword(Boolean(selected.password));
-    setFtpBookmarkOpen(false);
   };
 
   const openFtpBookmarkModal = () => {
@@ -1986,17 +1967,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!ftpBookmarkOpen) return;
-    const handlePointer = (event: PointerEvent) => {
-      if (!ftpBookmarkRef.current) return;
-      if (ftpBookmarkRef.current.contains(event.target as Node)) return;
-      setFtpBookmarkOpen(false);
-    };
-    window.addEventListener("pointerdown", handlePointer);
-    return () => window.removeEventListener("pointerdown", handlePointer);
-  }, [ftpBookmarkOpen]);
-
-  useEffect(() => {
     return () => {
       if (menuCloseRef.current !== null) {
         window.clearTimeout(menuCloseRef.current);
@@ -2015,43 +1985,13 @@ export default function App() {
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
-    if (!("__TAURI_IPC__" in window)) {
-      return;
-    }
-
-    let socket: WebSocket | null = null;
-    let reconnectId: number | null = null;
-
-    const connect = () => {
-      socket = new WebSocket("ws://127.0.0.1:1420", "vite-hmr");
-      socket.addEventListener("message", (event) => {
-        try {
-          const payload = JSON.parse(event.data as string) as { type?: string };
-          if (payload.type === "update" || payload.type === "full-reload") {
-            window.location.reload();
-          }
-        } catch {
-          // ignore
-        }
-      });
-      socket.addEventListener("close", () => {
-        if (reconnectId !== null) return;
-        reconnectId = window.setTimeout(() => {
-          reconnectId = null;
-          connect();
-        }, 1200);
-      });
-    };
-
-    connect();
-
+    if (!("__TAURI_IPC__" in window)) return;
+    const client = document.createElement("script");
+    client.type = "module";
+    client.src = "http://127.0.0.1:1420/@vite/client";
+    document.head.appendChild(client);
     return () => {
-      if (reconnectId !== null) {
-        window.clearTimeout(reconnectId);
-      }
-      if (socket) {
-        socket.close();
-      }
+      client.remove();
     };
   }, []);
 
@@ -2110,7 +2050,7 @@ export default function App() {
 
   return (
     <div
-      className="app explorer"
+      className="page app explorer"
       onDragEnter={
         isTauri
           ? undefined
@@ -2130,31 +2070,28 @@ export default function App() {
     >
       <AccessGate
         status={entitlementStatus}
-        primaryLabel="Open App Browser"
+        primaryLabel="Open Enderfall Hub"
         secondaryLabel="Retry"
         onPrimary={handleOpenAppBrowser}
         onSecondary={refreshEntitlement}
         primaryClassName="primary"
         secondaryClassName="ghost"
+        messageLocked={`Open Enderfall Hub to verify premium or admin access. (${entitlementDebug})`}
       />
-      <header className="topbar explorer-topbar">
-        <div className="menu-bar">
-          <div
-            className="menu-group"
-            onMouseEnter={() => openMenu("file")}
-            onMouseLeave={closeMenu}
-          >
-            <button className="menu-button" type="button">
-              File
-            </button>
-            {menuOpen === "file" ? (
-              <div className="menu-popover" onMouseEnter={() => openMenu("file")} onMouseLeave={closeMenu}>
-                <button className="menu-item" type="button" onClick={openPreferences}>
+      <MainHeader
+        logoSrc="/brand/enderfall-mark.png"
+        menus={[
+          {
+            id: "file",
+            label: "File",
+            content: (
+              <>
+                <button className="ef-menu-item" type="button" onClick={openPreferences}>
                   Preferences
                 </button>
-                <div className="menu-divider" />
+                <div className="ef-menu-divider" />
                 <button
-                  className="menu-item"
+                  className="ef-menu-item"
                   type="button"
                   onClick={handleConnect}
                   disabled={connected || connecting}
@@ -2162,16 +2099,16 @@ export default function App() {
                   Connect
                 </button>
                 <button
-                  className="menu-item"
+                  className="ef-menu-item"
                   type="button"
                   onClick={handleDisconnect}
                   disabled={!connected}
                 >
                   Disconnect
                 </button>
-                <div className="menu-divider" />
+                <div className="ef-menu-divider" />
                 <button
-                  className="menu-item"
+                  className="ef-menu-item"
                   type="button"
                   onClick={() =>
                     activePane === "local"
@@ -2187,7 +2124,7 @@ export default function App() {
                   New folder
                 </button>
                 <button
-                  className="menu-item"
+                  className="ef-menu-item"
                   type="button"
                   onClick={() =>
                     activePane === "local" ? refreshLocal(localPath) : refreshRemote()
@@ -2196,21 +2133,16 @@ export default function App() {
                 >
                   Refresh
                 </button>
-              </div>
-            ) : null}
-          </div>
-          <div
-            className="menu-group"
-            onMouseEnter={() => openMenu("edit")}
-            onMouseLeave={closeMenu}
-          >
-            <button className="menu-button" type="button">
-              Edit
-            </button>
-            {menuOpen === "edit" ? (
-              <div className="menu-popover" onMouseEnter={() => openMenu("edit")} onMouseLeave={closeMenu}>
+              </>
+            ),
+          },
+          {
+            id: "edit",
+            label: "Edit",
+            content: (
+              <>
                 <button
-                  className="menu-item"
+                  className="ef-menu-item"
                   type="button"
                   onClick={openActiveRename}
                   disabled={
@@ -2222,7 +2154,7 @@ export default function App() {
                   Rename
                 </button>
                 <button
-                  className="menu-item"
+                  className="ef-menu-item"
                   type="button"
                   onClick={openActiveDelete}
                   disabled={
@@ -2233,29 +2165,24 @@ export default function App() {
                 >
                   Delete
                 </button>
-              </div>
-            ) : null}
-          </div>
-          <div
-            className="menu-group"
-            onMouseEnter={() => openMenu("view")}
-            onMouseLeave={closeMenu}
-          >
-            <button className="menu-button" type="button">
-              View
-            </button>
-            {menuOpen === "view" ? (
-              <div className="menu-popover" onMouseEnter={() => openMenu("view")} onMouseLeave={closeMenu}>
-                <div className="menu-item has-submenu" role="button" tabIndex={0}>
+              </>
+            ),
+          },
+          {
+            id: "view",
+            label: "View",
+            content: (
+              <>
+                <div className="ef-menu-item has-submenu" role="button" tabIndex={0}>
                   <span>View mode</span>
-                  <span className="menu-sub-caret">
+                  <span className="ef-menu-sub-caret">
                     <IconChevronDown />
                   </span>
-                  <div className="menu-sub">
+                  <div className="ef-menu-sub">
                     {viewModeOptions.map((item) => (
                       <button
                         key={item.value}
-                        className="menu-item"
+                        className="ef-menu-item"
                         type="button"
                         onClick={() => setViewMode(item.value)}
                       >
@@ -2264,16 +2191,16 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-                <div className="menu-item has-submenu" role="button" tabIndex={0}>
+                <div className="ef-menu-item has-submenu" role="button" tabIndex={0}>
                   <span>Theme</span>
-                  <span className="menu-sub-caret">
+                  <span className="ef-menu-sub-caret">
                     <IconChevronDown />
                   </span>
-                  <div className="menu-sub">
+                  <div className="ef-menu-sub">
                     {themeOptions.map((item) => (
                       <button
                         key={item.value}
-                        className="menu-item"
+                        className="ef-menu-item"
                         type="button"
                         onClick={() => setThemeMode(item.value)}
                       >
@@ -2282,21 +2209,21 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-                <div className="menu-item has-submenu" role="button" tabIndex={0}>
+                <div className="ef-menu-item has-submenu" role="button" tabIndex={0}>
                   <span>Details pane</span>
-                  <span className="menu-sub-caret">
+                  <span className="ef-menu-sub-caret">
                     <IconChevronDown />
                   </span>
-                  <div className="menu-sub">
+                  <div className="ef-menu-sub">
                     <button
-                      className="menu-item"
+                      className="ef-menu-item"
                       type="button"
                       onClick={() => setDetailsPanePosition("right")}
                     >
                       Right
                     </button>
                     <button
-                      className="menu-item"
+                      className="ef-menu-item"
                       type="button"
                       onClick={() => setDetailsPanePosition("bottom")}
                     >
@@ -2304,29 +2231,29 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="menu-divider" />
-                <div className="menu-item has-submenu" role="button" tabIndex={0}>
+                <div className="ef-menu-divider" />
+                <div className="ef-menu-item has-submenu" role="button" tabIndex={0}>
                   <span>Sort by</span>
-                  <span className="menu-sub-caret">
+                  <span className="ef-menu-sub-caret">
                     <IconChevronDown />
                   </span>
-                  <div className="menu-sub">
+                  <div className="ef-menu-sub">
                     {sortPrimaryOptions.map((item) => (
                       <button
                         key={item.value}
-                        className="menu-item"
+                        className="ef-menu-item"
                         type="button"
                         onClick={() => setSortBy(item.value)}
                       >
                         {item.label}
                       </button>
                     ))}
-                    <div className="menu-divider" />
-                    <div className="menu-group-title">More</div>
+                    <div className="ef-menu-divider" />
+                    <div className="ef-menu-group-title">More</div>
                     {sortMoreOptions.map((item) => (
                       <button
                         key={item.value}
-                        className="menu-item"
+                        className="ef-menu-item"
                         type="button"
                         onClick={() => setSortBy(item.value)}
                       >
@@ -2335,21 +2262,21 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-                <div className="menu-item has-submenu" role="button" tabIndex={0}>
+                <div className="ef-menu-item has-submenu" role="button" tabIndex={0}>
                   <span>Order</span>
-                  <span className="menu-sub-caret">
+                  <span className="ef-menu-sub-caret">
                     <IconChevronDown />
                   </span>
-                  <div className="menu-sub">
+                  <div className="ef-menu-sub">
                     <button
-                      className="menu-item"
+                      className="ef-menu-item"
                       type="button"
                       onClick={() => setSortOrder("asc")}
                     >
                       Ascending
                     </button>
                     <button
-                      className="menu-item"
+                      className="ef-menu-item"
                       type="button"
                       onClick={() => setSortOrder("desc")}
                     >
@@ -2357,35 +2284,57 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-              </div>
-            ) : null}
+              </>
+            ),
+          },
+          {
+            id: "help",
+            label: "Help",
+            content: (
+              <button className="ef-menu-item" type="button" onClick={() => openLink("https://enderfall.co.uk")}>
+                About
+              </button>
+            ),
+          },
+        ]}
+        menuOpen={menuOpen}
+        onOpenMenu={openMenu}
+        onCloseMenu={closeMenu}
+        actions={
+          <div className="actions">
+            <Dropdown
+              variant="user"
+              name={displayName}
+              avatarUrl={avatarUrl}
+              avatarFallback={displayName.slice(0, 1).toUpperCase()}
+              items={[
+                {
+                  label: "Open Ender Transfer",
+                  onClick: focusSelf,
+                },
+                {
+                  label: "Open Enderfall Hub",
+                  onClick: handleOpenAppBrowser,
+                },
+                {
+                  label: "Profile",
+                  onClick: openProfile,
+                },
+                {
+                  label: "Logout",
+                  onClick: handleLogout,
+                },
+              ]}
+            />
           </div>
-          <div
-            className="menu-group"
-            onMouseEnter={() => openMenu("help")}
-            onMouseLeave={closeMenu}
-          >
-            <button className="menu-button" type="button">
-              Help
-            </button>
-            {menuOpen === "help" ? (
-              <div className="menu-popover" onMouseEnter={() => openMenu("help")} onMouseLeave={closeMenu}>
-                <button
-                  className="menu-item"
-                  type="button"
-                  onClick={() => openLink("https://enderfall.co.uk")}
-                >
-                  About
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <div className="connection-card compact">
+        }
+      />
+      <header className="topbar explorer-topbar">
+        <Panel variant="card" borderWidth={1} className="connection-card compact">
           <div className="connection-grid">
             <label>
               Host
-              <input
+              <Input
                 value={host}
                 onChange={(event) => setHost(event.target.value)}
                 placeholder="ftp.example.com"
@@ -2393,7 +2342,7 @@ export default function App() {
             </label>
             <label>
               Port
-              <input
+              <Input
                 type="number"
                 value={port}
                 onChange={(event) => setPort(Number(event.target.value))}
@@ -2402,6 +2351,8 @@ export default function App() {
             <label>
               Protocol
               <Dropdown
+                variant="bookmark"
+                layout="field"
                 value={protocol}
                 onChange={(value) => {
                   const next = value as "ftp" | "sftp";
@@ -2427,7 +2378,7 @@ export default function App() {
             {protocol === "sftp" && !isTauri ? (
               <label>
                 SFTP Port
-                <input
+                <Input
                   type="number"
                   value={sftpPort}
                   onChange={(event) => setSftpPort(Number(event.target.value))}
@@ -2436,7 +2387,7 @@ export default function App() {
             ) : null}
             <label>
               Username
-              <input
+              <Input
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
                 placeholder="anonymous"
@@ -2444,7 +2395,7 @@ export default function App() {
             </label>
             <label>
               Password
-              <input
+              <Input
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
@@ -2483,56 +2434,35 @@ export default function App() {
             </div>
           </div>
 
-          <div className="bookmark-row" ref={ftpBookmarkRef}>
-            <div className="bookmark-label">Bookmarks</div>
-            <div className={`bookmark-dropdown ${ftpBookmarkOpen ? "open" : ""}`}>
-              <button
-                className="bookmark-trigger"
-                onClick={() => setFtpBookmarkOpen((open) => !open)}
-              >
-                <span className="bookmark-icon">
-                  {selectedFtp ? (
-                    selectedFtp.password ? (
-                      <IconUnlock />
-                    ) : (
-                      <IconLock />
-                    )
-                  ) : (
-                    <IconLock />
-                  )}
-                </span>
-                <span className="bookmark-text">
-                  {selectedFtp ? selectedFtp.name : "Select a saved connection"}
-                </span>
-                <span className="bookmark-caret">
-                  <IconChevronDown />
-                </span>
-              </button>
-              {ftpBookmarkOpen ? (
-                <div className="bookmark-menu">
-                  {ftpBookmarks.length === 0 ? (
-                    <div className="side-muted">No saved connections.</div>
-                  ) : (
-                    ftpBookmarks.map((item) => (
-                      <button
-                        key={item.name}
-                        className="bookmark-item"
-                        onClick={() => handleFtpBookmarkSelect(item.name)}
-                      >
-                        <span className="bookmark-icon">
-                          {item.password ? <IconUnlock /> : <IconLock />}
-                        </span>
-                        <span className="bookmark-text">{item.name}</span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
+          <Dropdown
+            variant="bookmark"
+            label="Bookmarks"
+            value={selectedFtpBookmark}
+            placeholder="Select a saved connection"
+            sections={[
+              {
+                options: ftpBookmarks.map((item) => ({
+                  value: item.name,
+                  label: item.name,
+                  meta: item,
+                })),
+              },
+            ]}
+            onChange={(next, option) => handleFtpBookmarkSelect(option?.value ?? next)}
+            renderTriggerIcon={
+              selectedFtp ? (selectedFtp.password ? <IconUnlock /> : <IconLock />) : <IconLock />
+            }
+            renderItemIcon={(option) => {
+              const item = option.meta as FtpBookmark | undefined;
+              return item?.password ? <IconUnlock /> : <IconLock />;
+            }}
+            caret={<IconChevronDown />}
+            emptyLabel="No saved connections."
+            emptyClassName="side-muted"
+          />
+        </Panel>
 
-        <div className="activity-card">
+        <Panel variant="card" borderWidth={1} className="activity-card">
           <div className="section-title">Activity</div>
           {logs.length === 0 ? (
             <div className="empty-state">Actions will appear here.</div>
@@ -2548,11 +2478,13 @@ export default function App() {
               ))}
             </div>
           )}
-        </div>
+        </Panel>
       </header>
 
       <main className="shell">
-        <aside
+        <Panel
+          variant="card"
+          borderWidth={1}
           className="sidebar"
           onDragEnter={(event) => {
             event.preventDefault();
@@ -2651,11 +2583,13 @@ export default function App() {
             )}
           </div>
 
-        </aside>
+        </Panel>
 
         <section className={detailsPaneClass}>
           <section className="panes explorer-panes">
-            <div
+            <Panel
+              variant="card"
+              borderWidth={1}
               ref={localPaneRef}
               className={`pane ${softDragTarget === "local" ? "soft-drop" : ""}`}
               onDragEnter={(event) => {
@@ -2713,7 +2647,7 @@ export default function App() {
 
                 <div className="address-row">
                   <div className="address-input">
-                    <input
+                    <Input
                       value={localAddress}
                       onChange={(event) => setLocalAddress(event.target.value)}
                       onKeyDown={(event) => {
@@ -2726,7 +2660,7 @@ export default function App() {
                     </button>
                   </div>
                   <div className="search-row">
-                    <input
+                    <Input
                       value={localSearch}
                       onChange={(event) => setLocalSearch(event.target.value)}
                       placeholder="Search local"
@@ -3041,10 +2975,10 @@ export default function App() {
                   </div>
                 )}
               </div>
-            </div>
+            </Panel>
 
             <div className="transfer-actions">
-              <div className="action-card">
+              <Panel variant="card" borderWidth={1} className="action-card">
                 <div className="action-title">Transfer</div>
                 <button
                   className="primary"
@@ -3112,9 +3046,11 @@ export default function App() {
                     })
                   )}
                 </div>
-              </div>
+              </Panel>
             </div>
-            <div
+            <Panel
+              variant="card"
+              borderWidth={1}
               ref={remotePaneRef}
               className={`pane ${softDragTarget === "remote" ? "soft-drop" : ""}`}
               onDragEnter={(event) => {
@@ -3159,7 +3095,7 @@ export default function App() {
 
                 <div className="address-row">
                   <div className="address-input">
-                    <input
+                    <Input
                       value={remoteAddress}
                       onChange={(event) => setRemoteAddress(event.target.value)}
                       onKeyDown={(event) => {
@@ -3172,7 +3108,7 @@ export default function App() {
                     </button>
                   </div>
                   <div className="search-row">
-                    <input
+                    <Input
                       value={remoteSearch}
                       onChange={(event) => setRemoteSearch(event.target.value)}
                       placeholder="Search remote"
@@ -3381,10 +3317,10 @@ export default function App() {
                   </div>
                 )}
               </div>
-            </div>
+            </Panel>
           </section>
 
-          <aside className="details-pane">
+          <Panel variant="card" borderWidth={1} className="details-pane">
             <div className="section-title">Details</div>
             {detailsItem ? (
               <div className="details-content">
@@ -3497,7 +3433,7 @@ export default function App() {
             ) : (
               <div className="empty-state">Select an item to see details.</div>
             )}
-          </aside>
+          </Panel>
         </section>
       </main>
 
@@ -3512,7 +3448,7 @@ export default function App() {
               {modal.type === "prefs" && "Preferences"}
             </div>
             {modal.type !== "delete" && modal.type !== "prefs" && (
-              <input
+              <Input
                 autoFocus
                 value={modalValue}
                 onChange={(event) => setModalValue(event.target.value)}
@@ -3529,6 +3465,8 @@ export default function App() {
                 <label>
                   Theme
                   <Dropdown
+                    variant="bookmark"
+                    layout="field"
                     value={themeMode}
                     onChange={(value) => setThemeMode(value as ThemeMode)}
                     sections={[{ options: themeOptions }]}
@@ -3536,7 +3474,7 @@ export default function App() {
                 </label>
                 <label className={!isPremium ? "disabled" : ""}>
                   Upload speed (KB/s)
-                  <input
+                  <Input
                     type="number"
                     min={0}
                     value={uploadLimitKbps}
@@ -3546,7 +3484,7 @@ export default function App() {
                 </label>
                 <label className={!isPremium ? "disabled" : ""}>
                   Download speed (KB/s)
-                  <input
+                  <Input
                     type="number"
                     min={0}
                     value={downloadLimitKbps}
@@ -3584,13 +3522,17 @@ export default function App() {
               </div>
             )}
             <div className="modal-actions">
-              <button onClick={closeModal} className="ghost">
+              <Button variant="ghost" type="button" onClick={closeModal}>
                 {modal.type === "prefs" ? "Close" : "Cancel"}
-              </button>
+              </Button>
               {modal.type !== "prefs" ? (
-                <button onClick={confirmModal} className="primary">
-                  Confirm
-                </button>
+                <Button
+                  type="button"
+                  variant={modal.type === "delete" ? "delete" : "primary"}
+                  onClick={confirmModal}
+                >
+                  {modal.type === "delete" ? "Delete" : "Confirm"}
+                </Button>
               ) : null}
             </div>
           </div>
@@ -3599,6 +3541,25 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

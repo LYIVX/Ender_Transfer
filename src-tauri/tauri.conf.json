@@ -2,7 +2,7 @@
   "build": {
     "beforeDevCommand": "npm run dev:web",
     "beforeBuildCommand": "npm run build:web",
-    "devPath": "http://127.0.0.1:1420",
+    "devPath": "http://localhost:1420",
     "distDir": "../dist"
   },
   "package": {
@@ -21,13 +21,25 @@
       },
       "shell": {
         "open": true
+      },
+      "path": {
+        "all": true
       }
     },
     "security": {
-      "csp": null
+      "csp": null,
+      "dangerousRemoteDomainIpcAccess": [
+        {
+          "scheme": "http",
+          "domain": "localhost",
+          "windows": ["main"],
+          "enableTauriAPI": true
+        }
+      ]
     },
     "windows": [
       {
+        "label": "main",
         "title": "Ender Transfer",
         "width": 1200,
         "height": 760,

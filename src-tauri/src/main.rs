@@ -1034,7 +1034,26 @@ fn update_preferences(state: State<'_, AppState>, prefs: UiPreferencesInput) -> 
 }
 
 fn main() {
-  let builder = tauri::Builder::default().manage(AppState::default());
+  let builder = tauri::Builder::default()
+    .manage(AppState::default())
+    .setup(|app| {
+      if cfg!(debug_assertions) {
+        if let Some(window) = app.get_window("main") {
+          let _ = window.eval("window.location.replace('http://localhost:1420/');");
+        }
+      }
+      Ok(())
+    });
+  let builder = if cfg!(debug_assertions) {
+    builder
+  } else {
+    builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+      if let Some(window) = app.get_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+      }
+    }))
+  };
 
   #[cfg(feature = "system-tray")]
   let builder = builder

@@ -4,67 +4,6 @@
 @import "@fontsource/space-grotesk/700.css";
 @import "@enderfall/ui/styles.css";
 
-:root {
-  font-family: "Space Grotesk", "Segoe UI", sans-serif;
-  color: #1d232a;
-  background-color: #f4f1ea;
-
-  --bg: #f4f1ea;
-  --bg-soft: #f9f6f0;
-  --card: rgba(255, 255, 255, 0.88);
-  --text: #1d232a;
-  --muted: #5c6670;
-  --line: rgba(24, 32, 40, 0.12);
-  --accent: #1f7a8c;
-  --accent-dark: #165b68;
-  --accent-alt: #f29f45;
-  --accent-soft: #f7e6cf;
-  --danger: #c84c4c;
-  --shadow: 0 24px 60px rgba(23, 28, 33, 0.08);
-  --radius: 18px;
-  --row-odd: rgba(255, 255, 255, 0.9);
-  --scrollbar-track: rgba(255, 255, 255, 0.12);
-}
-
-:root[data-theme="dark"] {
-  color: #e7edf2;
-  background-color: #11161b;
-  --bg: #11161b;
-  --bg-soft: #1a2026;
-  --card: rgba(22, 27, 33, 0.92);
-  --text: #e7edf2;
-  --muted: #98a3ad;
-  --line: rgba(255, 255, 255, 0.12);
-  --accent: #4fb6c9;
-  --accent-dark: #3a8ea0;
-  --accent-alt: #f1b35d;
-  --accent-soft: rgba(241, 179, 93, 0.18);
-  --danger: #e06c6c;
-  --shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-  --row-odd: rgba(24, 30, 36, 0.95);
-  --scrollbar-track: rgba(24, 32, 40, 0.16);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] {
-    color: #e7edf2;
-    background-color: #11161b;
-    --bg: #11161b;
-    --bg-soft: #1a2026;
-    --card: rgba(22, 27, 33, 0.92);
-    --text: #e7edf2;
-    --muted: #98a3ad;
-    --line: rgba(255, 255, 255, 0.12);
-    --accent: #4fb6c9;
-    --accent-dark: #3a8ea0;
-    --accent-alt: #f1b35d;
-    --accent-soft: rgba(241, 179, 93, 0.18);
-    --danger: #e06c6c;
-    --shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-    --row-odd: rgba(24, 30, 36, 0.95);
-    --scrollbar-track: rgba(24, 32, 40, 0.16);
-  }
-}
 
 * {
   box-sizing: border-box;
@@ -94,7 +33,63 @@
 :root[data-theme="system"] *::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.45);
 }
-body {
+
+:root[data-theme="galaxy"] input:not(.ef-input),
+:root[data-theme="galaxy"] select:not(.ef-select) {
+  background: rgba(15, 18, 28, 0.9);
+  border-color: var(--card-border);
+  color: var(--text-strong);
+}
+
+:root[data-theme="galaxy"] .menu-bar,
+:root[data-theme="galaxy"] .menu-popover,
+:root[data-theme="galaxy"] .menu-sub,
+:root[data-theme="galaxy"] .brand,
+:root[data-theme="galaxy"] .connection-card,
+:root[data-theme="galaxy"] .activity-card,
+:root[data-theme="galaxy"] .preferences-card,
+:root[data-theme="galaxy"] .sidebar,
+:root[data-theme="galaxy"] .pane,
+:root[data-theme="galaxy"] .details-pane,
+:root[data-theme="galaxy"] .action-card,
+:root[data-theme="galaxy"] .queue-card,
+:root[data-theme="galaxy"] .log-card,
+:root[data-theme="galaxy"] .modal,
+:root[data-theme="galaxy"] .entry-card,
+:root[data-theme="galaxy"] .table-row,
+:root[data-theme="galaxy"] .queue-item,
+:root[data-theme="galaxy"] .empty-state {
+  background: var(--card);
+  border-color: var(--card-border);
+  color: var(--text-strong);
+}
+
+:root[data-theme="galaxy"] .table-head {
+  background: rgba(10, 12, 22, 0.9);
+  color: var(--text-muted);
+}
+
+:root[data-theme="galaxy"] .entry-card.selected,
+:root[data-theme="galaxy"] .table-row.selected,
+:root[data-theme="galaxy"] .side-item.active {
+  border-color: var(--accent);
+  background: rgba(124, 77, 255, 0.16);
+  color: var(--text-strong);
+}
+
+:root[data-theme="galaxy"] .queue-item.error,
+:root[data-theme="galaxy"] .action-icon.danger {
+  border-color: rgba(255, 77, 210, 0.45);
+}
+
+:root[data-theme="galaxy"] .progress {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+:root[data-theme="galaxy"] .progress-bar {
+  background: linear-gradient(90deg, #00e5ff, #7c4dff, #ff4dd2);
+}
+body:not(.ef-galaxy) {
   margin: 0;
   min-height: 100vh;
   background:
@@ -105,8 +100,8 @@ body {
   overflow: hidden;
 }
 
-:root[data-theme="dark"] body,
-:root[data-theme="system"] body {
+:root[data-theme="dark"] body:not(.ef-galaxy),
+:root[data-theme="system"] body:not(.ef-galaxy) {
   background:
     radial-gradient(circle at top left, rgba(79, 182, 201, 0.18), transparent 55%),
     radial-gradient(circle at 20% 20%, rgba(241, 179, 93, 0.16), transparent 50%),
@@ -119,67 +114,15 @@ body {
   height: 100vh;
 }
 
-button,
+button:not(.ef-button),
 input,
 select {
   font-family: inherit;
 }
 
-button {
-  border: none;
-  background: #fff;
-  color: var(--text);
-  border-radius: 999px;
-  padding: 10px 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-  box-shadow: 0 6px 16px rgba(22, 30, 40, 0.08);
-}
 
-:root[data-theme="dark"] button,
-:root[data-theme="system"] button {
-  background: rgba(24, 30, 36, 0.92);
-  color: var(--text);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
-}
-
-button:hover {
-  transform: translateY(-1px);
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-button.primary {
-  background: linear-gradient(135deg, var(--accent), #2490a4);
-  color: #fff;
-}
-
-button.primary.ghost {
-  background: linear-gradient(135deg, #ffffff, #eef4f6);
-  color: var(--accent-dark);
-  border: 1px solid rgba(31, 122, 140, 0.2);
-}
-
-:root[data-theme="dark"] button.primary.ghost,
-:root[data-theme="system"] button.primary.ghost {
-  background: rgba(24, 30, 36, 0.92);
-  color: var(--text);
-  border-color: var(--line);
-}
-
-button.ghost {
-  background: transparent;
-  border: 1px solid rgba(24, 32, 40, 0.18);
-  box-shadow: none;
-}
-
-input,
-select {
+input:not(.ef-input),
+select:not(.ef-select) {
   width: 100%;
   padding: 10px 12px;
   border-radius: 12px;
@@ -188,19 +131,19 @@ select {
   font-size: 0.95rem;
 }
 
-:root[data-theme="dark"] input,
-:root[data-theme="dark"] select,
-:root[data-theme="system"] input,
-:root[data-theme="system"] select {
+:root[data-theme="dark"] input:not(.ef-input),
+:root[data-theme="dark"] select:not(.ef-select),
+:root[data-theme="system"] input:not(.ef-input),
+:root[data-theme="system"] select:not(.ef-select) {
   background: rgba(20, 26, 32, 0.9);
   border-color: rgba(255, 255, 255, 0.14);
   color: var(--text);
 }
 
-.preferences-card select,
-.modal-form select,
-.side-field select,
-.dropdown-select {
+.preferences-card select:not(.ef-select),
+.modal-form select:not(.ef-select),
+.side-field select:not(.ef-select),
+.dropdown-select:not(.ef-select) {
   appearance: none;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(24, 32, 40, 0.18);
@@ -214,14 +157,14 @@ select {
   background-repeat: no-repeat;
 }
 
-:root[data-theme="dark"] .preferences-card select,
-:root[data-theme="dark"] .modal-form select,
-:root[data-theme="dark"] .side-field select,
-:root[data-theme="dark"] .dropdown-select,
-:root[data-theme="system"] .preferences-card select,
-:root[data-theme="system"] .modal-form select,
-:root[data-theme="system"] .side-field select,
-:root[data-theme="system"] .dropdown-select {
+:root[data-theme="dark"] .preferences-card select:not(.ef-select),
+:root[data-theme="dark"] .modal-form select:not(.ef-select),
+:root[data-theme="dark"] .side-field select:not(.ef-select),
+:root[data-theme="dark"] .dropdown-select:not(.ef-select),
+:root[data-theme="system"] .preferences-card select:not(.ef-select),
+:root[data-theme="system"] .modal-form select:not(.ef-select),
+:root[data-theme="system"] .side-field select:not(.ef-select),
+:root[data-theme="system"] .dropdown-select:not(.ef-select) {
   background-image: linear-gradient(45deg, transparent 50%, rgba(231, 237, 242, 0.6) 50%),
     linear-gradient(135deg, rgba(231, 237, 242, 0.6) 50%, transparent 50%);
 }
@@ -240,8 +183,7 @@ select {
 .action-card,
 .queue-card,
 .log-card,
-.modal,
-.bookmark-menu {
+.modal {
   background: var(--card);
   border-color: var(--line);
 }
@@ -255,13 +197,9 @@ select {
   background: rgba(20, 26, 32, 0.96);
 }
 
-:root[data-theme="dark"] .bookmark-trigger,
-:root[data-theme="dark"] .bookmark-menu,
 :root[data-theme="dark"] .side-item,
 :root[data-theme="dark"] .entry-card,
 :root[data-theme="dark"] .table-row,
-:root[data-theme="system"] .bookmark-trigger,
-:root[data-theme="system"] .bookmark-menu,
 :root[data-theme="system"] .side-item,
 :root[data-theme="system"] .entry-card,
 :root[data-theme="system"] .table-row {
@@ -288,18 +226,13 @@ select {
   border-color: rgba(200, 76, 76, 0.4);
 }
 
-:root[data-theme="dark"] .bookmark-trigger,
-:root[data-theme="system"] .bookmark-trigger {
-  box-shadow: none;
-}
-
 :root[data-theme="dark"] .progress,
 :root[data-theme="system"] .progress {
   background: rgba(255, 255, 255, 0.12);
 }
 
-:root[data-theme="dark"] .row-actions button,
-:root[data-theme="system"] .row-actions button {
+:root[data-theme="dark"] .row-actions button:not(.ef-button),
+:root[data-theme="system"] .row-actions button:not(.ef-button) {
   background: rgba(24, 30, 36, 0.9);
   border-color: rgba(255, 255, 255, 0.12);
 }
@@ -309,9 +242,9 @@ select {
   background: rgba(6, 10, 14, 0.6);
 }
 
-input:focus,
-select:focus,
-button:focus-visible {
+input:not(.ef-input):focus,
+select:not(.ef-select):focus,
+button:not(.ef-button):focus-visible {
   outline: 2px solid rgba(31, 122, 140, 0.4);
   outline-offset: 2px;
 }
@@ -567,8 +500,7 @@ button:focus-visible {
   gap: 14px;
 }
 
-.connection-grid label,
-.bookmark-row label {
+.connection-grid label {
   display: grid;
   gap: 8px;
   font-weight: 600;
@@ -591,116 +523,6 @@ button:focus-visible {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-.bookmark-row {
-  display: grid;
-  gap: 8px;
-}
-
-.bookmark-label {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.bookmark-dropdown {
-  position: relative;
-}
-
-.bookmark-trigger {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--line);
-  background: var(--card);
-  box-shadow: none;
-}
-
-.bookmark-trigger:hover {
-  transform: none;
-}
-
-.bookmark-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-}
-
-.bookmark-icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.bookmark-text {
-  flex: 1;
-  text-align: left;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.bookmark-caret {
-  color: var(--muted);
-  display: inline-flex;
-  align-items: center;
-}
-
-.bookmark-caret svg {
-  width: 14px;
-  height: 14px;
-}
-
-.bookmark-menu {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(100% + 6px);
-  background: var(--card);
-  border-radius: 12px;
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
-  max-height: 240px;
-  overflow: auto;
-  padding: 6px;
-  z-index: 20;
-}
-
-.bookmark-item {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: transparent;
-  border: 1px solid transparent;
-  box-shadow: none;
-  margin-bottom: 6px;
-}
-
-.bookmark-item:last-child {
-  margin-bottom: 0;
-}
-
-.bookmark-item:hover {
-  border-color: rgba(31, 122, 140, 0.2);
-  transform: none;
-}
-
-.bookmark-group {
-  padding: 6px 10px 4px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .main-grid {
@@ -950,11 +772,11 @@ button:focus-visible {
   align-items: center;
 }
 
-.address-input input {
+.address-input input:not(.ef-input) {
   flex: 1;
 }
 
-.search-row input {
+.search-row input:not(.ef-input) {
   width: 100%;
 }
 
@@ -1335,7 +1157,7 @@ button:focus-visible {
   transition: opacity 0.2s ease;
 }
 
-.row-actions button {
+.row-actions button:not(.ef-button) {
   padding: 6px;
   border-radius: 10px;
   background: var(--card);
@@ -1347,7 +1169,7 @@ button:focus-visible {
   justify-content: center;
 }
 
-.row-actions button:hover {
+.row-actions button:not(.ef-button):hover {
   transform: none;
 }
 
