@@ -33,6 +33,27 @@ use winreg::enums::HKEY_CURRENT_USER;
 #[cfg(target_os = "windows")]
 use winreg::RegKey;
 
+#[cfg(target_os = "windows")]
+fn apply_window_icon(app: &tauri::App) {
+  let icon_path = app
+    .path_resolver()
+    .resolve_resource("icons/icon.ico")
+    .or_else(|| {
+      let cwd = std::env::current_dir().ok()?;
+      let candidates = [
+        cwd.join("icons").join("icon.ico"),
+        cwd.join("src-tauri").join("icons").join("icon.ico"),
+        cwd.join("..").join("icons").join("icon.ico"),
+        cwd.join("..").join("src-tauri").join("icons").join("icon.ico"),
+      ];
+      candidates.into_iter().find(|path| path.exists())
+    });
+
+  if let (Some(window), Some(path)) = (app.get_window("main"), icon_path) {
+    let _ = window.set_icon(tauri::Icon::File(path));
+  }
+}
+
 #[derive(Default)]
 struct AppState {
   ftp: Mutex<Option<FtpStream>>,
@@ -1037,6 +1058,8 @@ fn main() {
   let builder = tauri::Builder::default()
     .manage(AppState::default())
     .setup(|app| {
+      #[cfg(target_os = "windows")]
+      apply_window_icon(app);
       if cfg!(debug_assertions) {
         if let Some(window) = app.get_window("main") {
           let _ = window.eval("window.location.replace('http://localhost:1420/');");

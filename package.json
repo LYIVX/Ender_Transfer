@@ -14,7 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "predev": "npm run ensure:tauri",
     "prebuild": "npm run ensure:tauri",
-    "postbuild": "node scripts/rename-msi.cjs"
+    "postbuild": "node scripts/rename-msi.cjs && node scripts/rename-exe.cjs"
   },
   "dependencies": {
     "@fontsource/space-grotesk": "^5.2.6",
