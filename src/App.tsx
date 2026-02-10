@@ -826,7 +826,8 @@ export default function App() {
   const [lastLocalIndex, setLastLocalIndex] = useState<number | null>(null);
 
   const [queue, setQueue] = useState<TransferItem[]>([]);
-  const [activeTransferId, setActiveTransferId] = useState<string | null>(null);
+  const [activeTransferIds, setActiveTransferIds] = useState<Set<string>>(new Set());
+  const maxConcurrentTransfers = isTauri ? 1 : 3;
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
   const [localBookmarks, setLocalBookmarks] = useState<Favorite[]>(loadLocalBookmarks());
@@ -1285,8 +1286,8 @@ export default function App() {
     });
   };
 
-  const queueActive = useMemo(
-    () => queue.find((item) => item.status === "active"),
+  const activeCount = useMemo(
+    () => queue.filter((item) => item.status === "active").length,
     [queue]
   );
 
@@ -2590,23 +2591,39 @@ export default function App() {
 
   useEffect(() => {
     if (!isTauri) return;
+    // Buffer progress events and flush at a throttled interval to avoid excessive re-renders
+    const progressBuffer = new Map<string, { transferred: number; total?: number | null }>();
+    let progressFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+    const flushProgress = () => {
+      if (progressBuffer.size === 0) return;
+      const updates = new Map(progressBuffer);
+      progressBuffer.clear();
+      setQueue((prev) =>
+        prev.map((item) => {
+          const update = updates.get(item.id);
+          if (!update) return item;
+          return {
+            ...item,
+            transferred: update.transferred,
+            total: update.total ?? item.total,
+          };
+        })
+      );
+    };
+
     const setup = async () => {
+      progressFlushTimer = setInterval(flushProgress, 500);
+
       const unlistenLog = await listen<LogEntry>("log", (event) => {
         setLogs((prev) => [event.payload, ...prev.slice(0, 199)]);
       });
       const unlistenProgress = await listen<TransferProgress>("transfer-progress", (event) => {
         const payload = event.payload;
-        setQueue((prev) =>
-          prev.map((item) =>
-            item.id === payload.id
-              ? {
-                  ...item,
-                  transferred: payload.transferred,
-                  total: payload.total ?? item.total,
-                }
-              : item
-          )
-        );
+        progressBuffer.set(payload.id, {
+          transferred: payload.transferred,
+          total: payload.total,
+        });
       });
       const unlistenComplete = await listen<{ id: string }>("transfer-complete", (event) => {
         const payload = event.payload;
@@ -2647,23 +2664,26 @@ export default function App() {
 
     const cleanupPromise = setup();
     return () => {
+      if (progressFlushTimer) clearInterval(progressFlushTimer);
+      flushProgress(); // flush any remaining buffered progress
       cleanupPromise.then((cleanup) => cleanup()).catch(() => null);
     };
   }, []);
 
   useEffect(() => {
-    if (activeTransferId || !queue.length) return;
+    if (activeTransferIds.size >= maxConcurrentTransfers || !queue.length) return;
     const next = queue.find((item) => item.status === "queued");
     if (!next) return;
 
-    const startTransfer = async () => {
-      setActiveTransferId(next.id);
-      setQueue((prev) =>
-        prev.map((item) =>
-          item.id === next.id ? { ...item, status: "active" } : item
-        )
-      );
+    // Mark as active immediately to prevent re-picking
+    setActiveTransferIds((prev) => new Set(prev).add(next.id));
+    setQueue((prev) =>
+      prev.map((item) =>
+        item.id === next.id ? { ...item, status: "active" } : item
+      )
+    );
 
+    const runTransfer = async () => {
       try {
         if (isTauri) {
           if (next.direction === "upload") {
@@ -2708,12 +2728,16 @@ export default function App() {
           )
         );
       } finally {
-        setActiveTransferId(null);
+        setActiveTransferIds((prev) => {
+          const updated = new Set(prev);
+          updated.delete(next.id);
+          return updated;
+        });
       }
     };
 
-    startTransfer();
-  }, [activeTransferId, queue, host, port, username, password]);
+    runTransfer();
+  }, [activeTransferIds.size, queue, host, port, username, password]);
 
   /* ── Transfer queue management ── */
   const clearCompletedTransfers = () => {
@@ -2735,7 +2759,7 @@ export default function App() {
   };
 
   const clearAllTransfers = () => {
-    if (queueActive) {
+    if (activeCount > 0) {
       // Keep only the currently active transfer
       setQueue((prev) => prev.filter((item) => item.status === "active"));
     } else {
@@ -4817,7 +4841,7 @@ export default function App() {
                   </Button>
                 </div>
                 <div className="action-status">
-                  <span>Queue {queue.length} / Active {queueActive ? 1 : 0}</span>
+                  <span>Queue {queue.length} / Active {activeCount}</span>
                   {queue.length > 0 && (
                     <span className="queue-actions">
                       {queue.some((i) => i.status === "error") && (

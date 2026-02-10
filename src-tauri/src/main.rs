@@ -1,6 +1,6 @@
 ﻿use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{Cursor, Read, Write};
+use std::io::{BufReader, BufWriter, Cursor, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -415,6 +415,7 @@ fn connect_with_timeout(host: &str, port: u16, timeout: Duration) -> Result<FtpS
         stream
           .set_write_timeout(Some(timeout))
           .map_err(map_err)?;
+        let _ = stream.set_nodelay(true);
         return FtpStream::connect_with_stream(stream).map_err(map_err);
       }
       Err(err) => last_err = Some(map_err(err)),
@@ -615,7 +616,7 @@ fn copy_with_progress(
   id: &str,
   total: Option<u64>,
 ) -> Result<u64, FtpError> {
-  let mut buffer = [0u8; 16 * 1024];
+  let mut buffer = [0u8; 128 * 1024];
   let mut transferred = 0u64;
   let mut last_emit = 0u64;
   let mut last_tick = Instant::now();
@@ -630,7 +631,7 @@ fn copy_with_progress(
       .map_err(FtpError::ConnectionError)?;
     transferred += read as u64;
 
-    if transferred - last_emit >= 128 * 1024 || last_tick.elapsed() > Duration::from_millis(250) {
+    if transferred - last_emit >= 512 * 1024 || last_tick.elapsed() > Duration::from_millis(500) {
       emit_progress(window, id, transferred, total);
       last_emit = transferred;
       last_tick = Instant::now();
@@ -670,8 +671,8 @@ impl<R: Read> Read for ProgressReader<R> {
     let read = self.inner.read(buf)?;
     if read > 0 {
       self.transferred += read as u64;
-      if self.transferred - self.last_emit >= 128 * 1024
-        || self.last_tick.elapsed() > Duration::from_millis(250)
+      if self.transferred - self.last_emit >= 512 * 1024
+        || self.last_tick.elapsed() > Duration::from_millis(500)
       {
         emit_progress(&self.window, &self.id, self.transferred, self.total);
         self.last_emit = self.transferred;
@@ -698,12 +699,15 @@ fn download_file(
   if let Some(parent) = target.parent() {
     fs::create_dir_all(parent).map_err(map_err)?;
   }
-  let mut file = File::create(&local_path).map_err(map_err)?;
+  let file = File::create(&local_path).map_err(map_err)?;
+  let mut writer = BufWriter::with_capacity(256 * 1024, file);
   let window_clone = window.clone();
   let id_clone = id.clone();
 
   match ftp.retr(&remote_path, |reader| {
-    copy_with_progress(reader, &mut file, &window_clone, &id_clone, total)
+    let result = copy_with_progress(reader, &mut writer, &window_clone, &id_clone, total);
+    writer.flush().map_err(FtpError::ConnectionError)?;
+    result
   }) {
     Ok(_) => {
       emit_done(&window, &id);
@@ -741,7 +745,8 @@ fn upload_file(
     ftp.set_mode(mode);
     let file = File::open(&local_path).map_err(FtpError::ConnectionError)?;
     let total = file.metadata().map(|m| m.len()).ok();
-    let reader = ProgressReader::new(file, window.clone(), id.clone(), total);
+    let buf_file = BufReader::with_capacity(256 * 1024, file);
+    let reader = ProgressReader::new(buf_file, window.clone(), id.clone(), total);
     let mut reader = reader;
     ftp.put_file(remote_path.clone(), &mut reader).map(|_| ())
   };
