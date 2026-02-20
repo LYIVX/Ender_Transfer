@@ -1322,7 +1322,7 @@ fn list_remote_files_recursive(
         out.push(RecursiveEntry { relative_path: rel.clone(), is_dir: true, size: None });
         walk(ftp, &full, base, out)?;
       } else {
-        out.push(RecursiveEntry { relative_path: rel, is_dir: false, size: Some(entry.size) });
+        out.push(RecursiveEntry { relative_path: rel, is_dir: false, size: entry.size });
       }
     }
     Ok(())
