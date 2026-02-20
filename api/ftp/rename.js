@@ -7,11 +7,14 @@ const {
   shouldFallbackToSftp,
   setCors,
   handleOptions,
+  validateHost,
+  validatePath,
+  sendError,
 } = require("./_client");
 
 module.exports = async (req, res) => {
   if (handleOptions(req, res)) return;
-  setCors(res);
+  setCors(req, res);
   if (req.method !== "POST") {
     res.statusCode = 405;
     res.end("Method Not Allowed");
@@ -19,6 +22,9 @@ module.exports = async (req, res) => {
   }
   try {
     const payload = await readJson(req);
+    await validateHost(payload.host);
+    validatePath(payload.from, "from");
+    validatePath(payload.to, "to");
     const config = buildConfig(payload);
     const renameFtp = async () => withClient(config, (client) => client.rename(payload.from, payload.to));
     const renameSftp = async () =>
@@ -36,8 +42,6 @@ module.exports = async (req, res) => {
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ ok: true }));
   } catch (error) {
-    res.statusCode = 500;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: String(error) }));
+    sendError(res, error.statusCode || 500, error);
   }
 };
