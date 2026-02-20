@@ -17,11 +17,12 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 nom-exif = "2.5.4"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 base64 = "0.22"
-windows = { version = "0.54", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_System_Com", "Win32_Graphics_Gdi"] }
+tempfile = "3"
 tauri-plugin-single-instance = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v1", package = "tauri-plugin-single-instance" }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows = { version = "0.54", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_Graphics_Gdi"] }
 
 [features]
 default = [ "system-tray", "custom-protocol" ]
