@@ -9,11 +9,14 @@ const {
   shouldFallbackToSftp,
   setCors,
   handleOptions,
+  validateHost,
+  validatePath,
+  sendError,
 } = require("./_client");
 
 module.exports = async (req, res) => {
   if (handleOptions(req, res)) return;
-  setCors(res);
+  setCors(req, res);
   if (req.method !== "POST") {
     res.statusCode = 405;
     res.end("Method Not Allowed");
@@ -21,29 +24,47 @@ module.exports = async (req, res) => {
   }
   try {
     const payload = await readJson(req);
+    await validateHost(payload.host);
+    validatePath(payload.remotePath, "remotePath");
     const config = buildConfig(payload);
     const remotePath = payload.remotePath;
-    const filename = payload.filename || path.basename(remotePath || "download");
-    res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${filename.replace(/"/g, "")}"`
-    );
+    const rawName = payload.filename || path.basename(remotePath || "download");
+    const filename = path.basename(rawName).replace(/[^\w.\-]/g, "_");
     const limitKbps = payload.downloadLimitKbps ? Number(payload.downloadLimitKbps) : 0;
     const throttle = createThrottleStream(limitKbps * 1024);
-    if (throttle) {
-      throttle.pipe(res);
-    }
+
+    // Defer response headers until the FTP/SFTP connection is established
+    const startDownload = () => {
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      if (throttle) {
+        throttle.pipe(res);
+      }
+    };
+
     const target = throttle ?? res;
     const downloadFtp = async () =>
-      withClient(config, (client) => client.downloadTo(target, remotePath));
+      withClient(config, (client) => {
+        startDownload();
+        return client.downloadTo(target, remotePath);
+      });
     const downloadSftp = async () =>
       withSftpClient(buildSftpConfig(payload), (client) => {
+        startDownload();
         const readStream = client.createReadStream(remotePath);
         return new Promise((resolve, reject) => {
-          readStream.on("error", reject);
-          res.on("close", resolve);
-          res.on("finish", resolve);
+          let settled = false;
+          const settle = (fn) => (val) => { if (!settled) { settled = true; fn(val); } };
+          readStream.on("error", (err) => {
+            readStream.destroy();
+            if (throttle) throttle.destroy();
+            settle(reject)(err);
+          });
+          res.on("close", () => {
+            readStream.destroy();
+            settle(resolve)();
+          });
+          res.on("finish", settle(resolve));
           readStream.pipe(target);
         });
       });
@@ -58,8 +79,6 @@ module.exports = async (req, res) => {
       }
     }
   } catch (error) {
-    res.statusCode = 500;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: String(error) }));
+    sendError(res, error.statusCode || 500, error);
   }
 };

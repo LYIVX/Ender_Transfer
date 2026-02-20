@@ -28,8 +28,11 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Shell::{
-  IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_THUMBNAILONLY,
+  IShellItemImageFactory, SHCreateItemFromParsingName, ShellExecuteW,
+  SIIGBF_BIGGERSIZEOK, SIIGBF_THUMBNAILONLY,
 };
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 #[cfg(target_os = "windows")]
 use winreg::enums::HKEY_CURRENT_USER;
 #[cfg(target_os = "windows")]
@@ -227,11 +230,11 @@ fn entry_to_u32(value: &EntryValue) -> Option<u32> {
     EntryValue::U8(v) => Some(*v as u32),
     EntryValue::U16(v) => Some(*v as u32),
     EntryValue::U32(v) => Some(*v),
-    EntryValue::U64(v) => Some(*v as u32),
-    EntryValue::I8(v) => Some(*v as u32),
-    EntryValue::I16(v) => Some(*v as u32),
-    EntryValue::I32(v) => Some(*v as u32),
-    EntryValue::I64(v) => Some(*v as u32),
+    EntryValue::U64(v) => u32::try_from(*v).ok(),
+    EntryValue::I8(v) => u32::try_from(*v).ok(),
+    EntryValue::I16(v) => u32::try_from(*v).ok(),
+    EntryValue::I32(v) => u32::try_from(*v).ok(),
+    EntryValue::I64(v) => u32::try_from(*v).ok(),
     _ => entry_to_string(value).and_then(|text| parse_exif_rating(&text)),
   }
 }
@@ -251,6 +254,13 @@ fn parse_exif_rating(value: &str) -> Option<u32> {
   } else {
     digits.parse::<u32>().ok()
   }
+}
+
+fn is_image_extension(path: &Path) -> bool {
+  matches!(
+    path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+    Some("jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tif" | "tiff" | "heic" | "heif" | "avif")
+  )
 }
 
 fn normalize_cwd(cwd: String) -> String {
@@ -343,9 +353,9 @@ fn parse_list_entry(line: &str) -> Option<FtpEntry> {
   }
 
   let parts: Vec<&str> = trimmed.split_whitespace().collect();
-  if parts.len() >= 4 && parts[0].contains('-') && parts[1].contains(':') {
+  if parts.len() >= 4 && (parts[0].contains('-') || parts[0].contains('/')) && parts[1].contains(':') {
     let is_dir = parts[2].eq_ignore_ascii_case("<DIR>");
-    let size = if is_dir { None } else { parts[2].parse::<u64>().ok() };
+    let size = if is_dir { None } else { parts[2].replace(',', "").parse::<u64>().ok() };
     let name = normalize_line_name(parts[3..].join(" "));
     if name.is_empty() {
       return None;
@@ -507,21 +517,34 @@ fn join_remote(base: &str, name: &str) -> String {
 }
 
 fn copy_remote_file(ftp: &mut FtpStream, from: &str, to: &str) -> Result<(), String> {
-  let mut data: Vec<u8> = Vec::new();
+  let tmp = tempfile::tempfile().map_err(map_err)?;
+  let mut writer = BufWriter::new(tmp);
   ftp
     .retr(from, |reader| {
-      reader
-        .read_to_end(&mut data)
+      std::io::copy(reader, &mut writer)
         .map(|_| ())
         .map_err(FtpError::ConnectionError)
     })
     .map_err(map_err)?;
-  let mut cursor = Cursor::new(data);
-  ftp.put_file(to.to_string(), &mut cursor).map_err(map_err)?;
+  writer.flush().map_err(map_err)?;
+  let mut tmp = writer.into_inner().map_err(map_err)?;
+  use std::io::Seek;
+  tmp.seek(std::io::SeekFrom::Start(0)).map_err(map_err)?;
+  let mut reader = BufReader::new(tmp);
+  ftp.put_file(to.to_string(), &mut reader).map_err(map_err)?;
   Ok(())
 }
 
+const MAX_REMOTE_DEPTH: usize = 20;
+
 fn copy_remote_dir(ftp: &mut FtpStream, from: &str, to: &str) -> Result<(), String> {
+  copy_remote_dir_inner(ftp, from, to, 0)
+}
+
+fn copy_remote_dir_inner(ftp: &mut FtpStream, from: &str, to: &str, depth: usize) -> Result<(), String> {
+  if depth >= MAX_REMOTE_DEPTH {
+    return Err("Directory nesting too deep (max 20 levels)".into());
+  }
   let _ = ftp.mkdir(to);
   let listing = ftp.list(Some(from)).map_err(map_err)?;
   let entries = parse_list_entries(listing);
@@ -532,7 +555,7 @@ fn copy_remote_dir(ftp: &mut FtpStream, from: &str, to: &str) -> Result<(), Stri
     let from_path = join_remote(from, &entry.name);
     let to_path = join_remote(to, &entry.name);
     if entry.is_dir {
-      copy_remote_dir(ftp, &from_path, &to_path)?;
+      copy_remote_dir_inner(ftp, &from_path, &to_path, depth + 1)?;
     } else {
       copy_remote_file(ftp, &from_path, &to_path)?;
     }
@@ -560,6 +583,13 @@ fn copy_remote(
 }
 
 fn delete_remote_dir(ftp: &mut FtpStream, path: &str) -> Result<(), String> {
+  delete_remote_dir_inner(ftp, path, 0)
+}
+
+fn delete_remote_dir_inner(ftp: &mut FtpStream, path: &str, depth: usize) -> Result<(), String> {
+  if depth >= MAX_REMOTE_DEPTH {
+    return Err("Directory nesting too deep (max 20 levels)".into());
+  }
   let listing = ftp.list(Some(path)).map_err(map_err)?;
   let entries = parse_list_entries(listing);
   for entry in entries {
@@ -568,7 +598,7 @@ fn delete_remote_dir(ftp: &mut FtpStream, path: &str) -> Result<(), String> {
     }
     let child = join_remote(path, &entry.name);
     if entry.is_dir {
-      delete_remote_dir(ftp, &child)?;
+      delete_remote_dir_inner(ftp, &child, depth + 1)?;
     } else {
       ftp.rm(child).map_err(map_err)?;
     }
@@ -699,7 +729,8 @@ fn download_file(
   if let Some(parent) = target.parent() {
     fs::create_dir_all(parent).map_err(map_err)?;
   }
-  let file = File::create(&local_path).map_err(map_err)?;
+  let tmp_path = format!("{}.part", local_path);
+  let file = File::create(&tmp_path).map_err(map_err)?;
   let mut writer = BufWriter::with_capacity(256 * 1024, file);
   let window_clone = window.clone();
   let id_clone = id.clone();
@@ -710,11 +741,13 @@ fn download_file(
     result
   }) {
     Ok(_) => {
+      fs::rename(&tmp_path, &local_path).map_err(map_err)?;
       emit_done(&window, &id);
       log_event(&window, "success", format!("Downloaded {}", remote_path));
       Ok(())
     }
     Err(err) => {
+      let _ = fs::remove_file(&tmp_path);
       emit_error(&window, &id, err.to_string());
       Err(map_err(err))
     }
@@ -829,7 +862,7 @@ fn list_local(path: String) -> Result<LocalListResponse, String> {
     let mut rating = None;
     let mut tags: Option<Vec<String>> = None;
 
-    if metadata.is_file() {
+    if metadata.is_file() && is_image_extension(&entry.path()) {
       if let Ok((width, height)) = image::image_dimensions(entry.path()) {
         dimensions = Some(Dimensions { width, height });
       }
@@ -988,11 +1021,22 @@ fn launch_path(path: String) -> Result<(), String> {
   }
   #[cfg(target_os = "windows")]
   {
-    std::process::Command::new("cmd")
-      .args(["/C", "start", "", &path])
-      .creation_flags(0x08000000) // CREATE_NO_WINDOW
-      .spawn()
-      .map_err(map_err)?;
+    use std::os::windows::ffi::OsStrExt;
+    let wide_path: Vec<u16> = std::ffi::OsStr::new(&path)
+      .encode_wide()
+      .chain(std::iter::once(0))
+      .collect();
+    let wide_open: Vec<u16> = "open\0".encode_utf16().collect();
+    unsafe {
+      windows::Win32::UI::Shell::ShellExecuteW(
+        windows::Win32::Foundation::HWND::default(),
+        PCWSTR(wide_open.as_ptr()),
+        PCWSTR(wide_path.as_ptr()),
+        PCWSTR::null(),
+        PCWSTR::null(),
+        windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+      );
+    }
     return Ok(());
   }
   #[cfg(target_os = "macos")]
@@ -1043,18 +1087,18 @@ fn open_properties(path: String) -> Result<(), String> {
       .parent()
       .and_then(|value| value.to_str())
       .unwrap_or("")
-      .replace("'", "''");
+      .to_string();
     let name = Path::new(&path)
       .file_name()
       .and_then(|value| value.to_str())
       .unwrap_or("")
-      .replace("'", "''");
-    let command = format!(
-      "$shell = New-Object -ComObject Shell.Application; $folder = $shell.Namespace('{}'); $item = $folder.ParseName('{}'); $item.InvokeVerb('Properties');",
-      parent, name
-    );
+      .to_string();
+    let command = "$shell = New-Object -ComObject Shell.Application; $folder = $shell.Namespace($env:_ENDER_PROP_DIR); $item = $folder.ParseName($env:_ENDER_PROP_NAME); $item.InvokeVerb('Properties');";
     std::process::Command::new("powershell")
-      .args(["-NoProfile", "-Command", &command])
+      .args(["-NoProfile", "-Command", command])
+      .env("_ENDER_PROP_DIR", &parent)
+      .env("_ENDER_PROP_NAME", &name)
+      .creation_flags(0x08000000) // CREATE_NO_WINDOW
       .spawn()
       .map_err(map_err)?;
     Ok(())
@@ -1068,7 +1112,12 @@ fn open_properties(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn get_env(key: String) -> Option<String> {
-  std::env::var(key).ok()
+  const ALLOWED: &[&str] = &["USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"];
+  if ALLOWED.iter().any(|&k| k.eq_ignore_ascii_case(&key)) {
+    std::env::var(key).ok()
+  } else {
+    None
+  }
 }
 
 #[tauri::command]
@@ -1109,6 +1158,11 @@ fn mime_from_path(path: &str) -> &'static str {
 
 #[tauri::command]
 fn read_local_image_data(path: String) -> Result<String, String> {
+  let metadata = fs::metadata(&path).map_err(map_err)?;
+  const MAX_IMAGE_BYTES: u64 = 100 * 1024 * 1024;
+  if metadata.len() > MAX_IMAGE_BYTES {
+    return Err("too_large".to_string());
+  }
   let mut file = File::open(&path).map_err(map_err)?;
   let mut buf = Vec::new();
   file.read_to_end(&mut buf).map_err(map_err)?;
@@ -1158,22 +1212,38 @@ fn read_local_video_thumb(_window: Window, path: String, max_size: u32) -> Resul
 
 #[cfg(target_os = "windows")]
 fn read_shell_thumbnail(path: &str, max_size: u32) -> Result<String, String> {
-  unsafe {
-    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok();
-  }
+  let com_needs_uninit = unsafe {
+    CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok()
+  };
 
   let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+  if max_size > i32::MAX as u32 {
+    if com_needs_uninit { unsafe { CoUninitialize() }; }
+    return Err("Thumbnail size too large".to_string());
+  }
   let size = SIZE {
     cx: max_size as i32,
     cy: max_size as i32,
   };
 
-  let factory: IShellItemImageFactory = unsafe {
-    SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None).map_err(map_err)?
+  let factory: IShellItemImageFactory = match unsafe {
+    SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)
+  } {
+    Ok(f) => f,
+    Err(e) => {
+      if com_needs_uninit { unsafe { CoUninitialize() }; }
+      return Err(map_err(e));
+    }
   };
 
   let flags = SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK;
-  let hbitmap = unsafe { factory.GetImage(size, flags).map_err(map_err)? };
+  let hbitmap = match unsafe { factory.GetImage(size, flags) } {
+    Ok(h) => h,
+    Err(e) => {
+      if com_needs_uninit { unsafe { CoUninitialize() }; }
+      return Err(map_err(e));
+    }
+  };
 
   let mut bmp = BITMAP::default();
   let res = unsafe {
@@ -1185,7 +1255,7 @@ fn read_shell_thumbnail(path: &str, max_size: u32) -> Result<String, String> {
   };
   if res == 0 {
     unsafe { DeleteObject(hbitmap) };
-    unsafe { CoUninitialize() };
+    if com_needs_uninit { unsafe { CoUninitialize() }; }
     return Err("bitmap_failed".to_string());
   }
 
@@ -1213,10 +1283,10 @@ fn read_shell_thumbnail(path: &str, max_size: u32) -> Result<String, String> {
   let hdc = unsafe { CreateCompatibleDC(None) };
   if hdc.0 == 0 {
     unsafe { DeleteObject(hbitmap) };
-    unsafe { CoUninitialize() };
+    if com_needs_uninit { unsafe { CoUninitialize() }; }
     return Err("dc_failed".to_string());
   }
-  let _old = unsafe { SelectObject(hdc, hbitmap) };
+  let old = unsafe { SelectObject(hdc, hbitmap) };
   let scan = unsafe {
     GetDIBits(
       hdc,
@@ -1228,9 +1298,10 @@ fn read_shell_thumbnail(path: &str, max_size: u32) -> Result<String, String> {
       DIB_RGB_COLORS,
     )
   };
+  unsafe { SelectObject(hdc, old) };
   unsafe { DeleteDC(hdc) };
   unsafe { DeleteObject(hbitmap) };
-  unsafe { CoUninitialize() };
+  if com_needs_uninit { unsafe { CoUninitialize() }; }
 
   if scan == 0 {
     return Err("dibits_failed".to_string());
@@ -1322,7 +1393,7 @@ fn list_remote_files_recursive(
         out.push(RecursiveEntry { relative_path: rel.clone(), is_dir: true, size: None });
         walk(ftp, &full, base, out)?;
       } else {
-        out.push(RecursiveEntry { relative_path: rel, is_dir: false, size: Some(entry.size) });
+        out.push(RecursiveEntry { relative_path: rel, is_dir: false, size: entry.size });
       }
     }
     Ok(())
@@ -1375,7 +1446,7 @@ fn main() {
               }
             }
             "quit" => {
-              std::process::exit(0);
+              app.exit(0);
             }
             _ => {}
           }

@@ -610,7 +610,7 @@ const clearEllipsisTooltip = (event: ReactMouseEvent<HTMLElement>) => {
 
 const formatBytes = (value?: number | null) => {
   if (!value && value !== 0) return "-";
-  if (value === 0) return "0 B";
+  if (value <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
   const num = value / Math.pow(1024, exponent);
@@ -843,6 +843,7 @@ export default function App() {
   const [savePassword, setSavePassword] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragPayloadRef = useRef<DragPayload | null>(null);
+  const blobUrlsRef = useRef<Set<string>>(new Set());
   const localPaneRef = useRef<HTMLDivElement | null>(null);
   const remotePaneRef = useRef<HTMLDivElement | null>(null);
   const [softDragTarget, setSoftDragTarget] = useState<"local" | "remote" | null>(null);
@@ -871,6 +872,26 @@ export default function App() {
   const sharedThemeUpdatedAtRef = useRef<number>(0);
   const sharedThemeApplyRef = useRef<ThemeMode | null>(null);
   const sharedAnimationsApplyRef = useRef<boolean | null>(null);
+
+  // Refs for stable keyboard handler (avoids re-registering listener every render)
+  const keyboardRef = useRef<{
+    contextMenu: typeof contextMenu;
+    activePane: string;
+    selectedLocal: string[];
+    selectedRemote: string[];
+    localPath: string;
+    remotePath: string;
+    localEntries: LocalEntry[];
+    remoteEntries: FtpEntry[];
+    openActiveDelete: () => void;
+    openActiveRename: () => void;
+    undoLast: () => void;
+    redoLast: () => void;
+    openEntry: (e: { scope: string; name: string; path: string; isDir: boolean; isImage: boolean; isVideo: boolean }) => void;
+    addLog: (level: string, message: string) => void;
+    setSelectedLocal: (v: string[]) => void;
+    setSelectedRemote: (v: string[]) => void;
+  } | null>(null);
   const sharedThemeAllowed = useMemo(
     () => new Set<ThemeMode>(["system", "galaxy", "light", "plain-light", "plain-dark"]),
     []
@@ -1034,7 +1055,7 @@ export default function App() {
       }
     }, 3000);
     return () => window.clearInterval(interval);
-  }, [themeMode, sharedThemeAllowed]);
+  }, [themeMode, animationsEnabled, sharedThemeAllowed]);
 
   const [localSearch, setLocalSearch] = useState("");
   const [remoteSearch, setRemoteSearch] = useState("");
@@ -1349,37 +1370,39 @@ export default function App() {
     };
   }, [contextMenu]);
 
-  /* ── Global keyboard shortcuts ── */
+  /* ── Global keyboard shortcuts (registered once, reads from ref) ── */
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
+      const s = keyboardRef.current;
+      if (!s) return;
       // Skip when user is typing in an input / textarea / contentEditable
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
       // Skip when a modal or context menu is open
-      if (contextMenu) return;
+      if (s.contextMenu) return;
 
       // Delete – delete selected item
       if (e.key === "Delete") {
         e.preventDefault();
-        openActiveDelete();
+        s.openActiveDelete();
         return;
       }
       // F2 – rename selected item
       if (e.key === "F2") {
         e.preventDefault();
-        openActiveRename();
+        s.openActiveRename();
         return;
       }
       // Ctrl+Z – undo
       if (e.ctrlKey && !e.shiftKey && e.key === "z") {
         e.preventDefault();
-        undoLast();
+        s.undoLast();
         return;
       }
       // Ctrl+Y – redo
       if (e.ctrlKey && e.key === "y") {
         e.preventDefault();
-        redoLast();
+        s.redoLast();
         return;
       }
       // Ctrl+Shift+C – copy path
@@ -1387,18 +1410,18 @@ export default function App() {
         e.preventDefault();
         (async () => {
           let value = "";
-          if (activePane === "local") {
-            value = selectedLocal[0] ?? localPath;
+          if (s.activePane === "local") {
+            value = s.selectedLocal[0] ?? s.localPath;
           } else {
-            const sel = selectedRemote[0];
-            value = sel ? buildRemotePath(remotePath || "/", sel) : remotePath || "/";
+            const sel = s.selectedRemote[0];
+            value = sel ? buildRemotePath(s.remotePath || "/", sel) : s.remotePath || "/";
           }
           if (!value) return;
           try {
             await navigator.clipboard.writeText(value);
-            addLog("info", "Path copied to clipboard.");
+            s.addLog("info", "Path copied to clipboard.");
           } catch {
-            addLog("error", "Unable to copy path.");
+            s.addLog("error", "Unable to copy path.");
           }
         })();
         return;
@@ -1406,22 +1429,22 @@ export default function App() {
       // Ctrl+A – select all in active pane
       if (e.ctrlKey && e.key === "a") {
         e.preventDefault();
-        if (activePane === "local") {
-          setSelectedLocal(localEntries.map((item) => item.path));
+        if (s.activePane === "local") {
+          s.setSelectedLocal(s.localEntries.map((item) => item.path));
         } else {
-          setSelectedRemote(remoteEntries.map((item) => item.name));
+          s.setSelectedRemote(s.remoteEntries.map((item) => item.name));
         }
         return;
       }
       // Alt+Enter – properties (local only, Tauri only)
       if (e.altKey && e.key === "Enter") {
         e.preventDefault();
-        if (activePane === "local" && isTauri) {
-          const target = selectedLocal[0] ?? localPath;
+        if (s.activePane === "local" && isTauri) {
+          const target = s.selectedLocal[0] ?? s.localPath;
           if (target && target !== "this_pc") {
             invoke("open_properties", { path: target }).catch((error) => {
               const message = error instanceof Error ? error.message : String(error);
-              addLog("error", message);
+              s.addLog("error", message);
             });
           }
         }
@@ -1430,11 +1453,11 @@ export default function App() {
       // Enter – open selected item
       if (e.key === "Enter") {
         e.preventDefault();
-        if (activePane === "local") {
-          const target = selectedLocal[0];
-          const entry = localEntries.find((item) => item.path === target);
+        if (s.activePane === "local") {
+          const target = s.selectedLocal[0];
+          const entry = s.localEntries.find((item) => item.path === target);
           if (entry) {
-            openEntry({
+            s.openEntry({
               scope: "local",
               name: entry.name,
               path: entry.path,
@@ -1444,13 +1467,13 @@ export default function App() {
             });
           }
         } else {
-          const target = selectedRemote[0];
-          const entry = remoteEntries.find((item) => item.name === target);
+          const target = s.selectedRemote[0];
+          const entry = s.remoteEntries.find((item) => item.name === target);
           if (entry) {
-            openEntry({
+            s.openEntry({
               scope: "remote",
               name: entry.name,
-              path: buildRemotePath(remotePath || "/", entry.name),
+              path: buildRemotePath(s.remotePath || "/", entry.name),
               isDir: entry.is_dir,
               isImage: !entry.is_dir && isImageFile(entry.name),
               isVideo: !entry.is_dir && isVideoFile(entry.name),
@@ -1462,7 +1485,8 @@ export default function App() {
     };
     window.addEventListener("keydown", handleGlobalKey);
     return () => window.removeEventListener("keydown", handleGlobalKey);
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const displayName =
     launchToken?.displayName || launchToken?.email?.split("@")[0] || "Account";
@@ -2501,7 +2525,9 @@ export default function App() {
         if (entry.is_dir || !isImageFile(entry.name) || !entry.file) return;
         const key = toImageKey(entry.path, thumbSize);
         if (next[key]) return;
-        next[key] = URL.createObjectURL(entry.file);
+        const blobUrl = URL.createObjectURL(entry.file);
+        blobUrlsRef.current.add(blobUrl);
+        next[key] = blobUrl;
         changed = true;
       });
       if (changed) {
@@ -3200,6 +3226,26 @@ export default function App() {
     }
   };
 
+  /* ── Sync keyboard ref with latest state (cheap assignment, no re-render) ── */
+  keyboardRef.current = {
+    contextMenu,
+    activePane,
+    selectedLocal,
+    selectedRemote,
+    localPath,
+    remotePath,
+    localEntries,
+    remoteEntries,
+    openActiveDelete,
+    openActiveRename,
+    undoLast,
+    redoLast,
+    openEntry,
+    addLog,
+    setSelectedLocal,
+    setSelectedRemote,
+  };
+
   const commitInlineRename = async () => {
     if (!renameState) return;
     const nextName = renameState.value.trim();
@@ -3606,6 +3652,7 @@ export default function App() {
 
   const startSoftDrag = (payload: DragPayload, event: React.PointerEvent) => {
     if (!isTauri) return;
+    if (dragPayloadRef.current) return;
     if (event.button !== 0) return;
     if ((event.target as HTMLElement).closest("button")) return;
     event.preventDefault();
@@ -3615,6 +3662,13 @@ export default function App() {
     const handleMove = (moveEvent: PointerEvent) => {
       const target = getSoftDropTarget(moveEvent.clientX, moveEvent.clientY);
       setSoftDragTarget(target);
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleCancel);
+      window.removeEventListener("blur", handleCancel);
     };
 
     const handleUp = (upEvent: PointerEvent) => {
@@ -3627,11 +3681,19 @@ export default function App() {
         enqueueDownloadNames(payload.paths).catch(() => null);
       }
       dragPayloadRef.current = null;
-      window.removeEventListener("pointermove", handleMove);
+      cleanup();
+    };
+
+    const handleCancel = () => {
+      setSoftDragTarget(null);
+      dragPayloadRef.current = null;
+      cleanup();
     };
 
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp, { once: true });
+    window.addEventListener("pointercancel", handleCancel, { once: true });
+    window.addEventListener("blur", handleCancel, { once: true });
   };
 
   useEffect(() => {
@@ -3639,6 +3701,13 @@ export default function App() {
       if (menuCloseRef.current !== null) {
         window.clearTimeout(menuCloseRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      blobUrlsRef.current.forEach((url: string) => URL.revokeObjectURL(url));
+      blobUrlsRef.current.clear();
     };
   }, []);
 
@@ -3678,6 +3747,7 @@ export default function App() {
     if (!isTauri) {
       if (detailsItem.file) {
         const url = URL.createObjectURL(detailsItem.file);
+        blobUrlsRef.current.add(url);
         setImageCache((prev) => ({ ...prev, [key]: url }));
       }
       return;
@@ -3703,6 +3773,7 @@ export default function App() {
     if (!isTauri) {
       if (detailsItem.file) {
         const url = URL.createObjectURL(detailsItem.file);
+        blobUrlsRef.current.add(url);
         setVideoPreviewCache((prev) => ({
           ...prev,
           [key]: url,
