@@ -9,17 +9,24 @@ import {
 import { isTauri, appId } from "../constants";
 import { openLink } from "../utils";
 
+const isMobilePlatform = () => {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent.toLowerCase();
+  return /android|iphone|ipad|ipod|mobile/.test(ua);
+};
+
 export function useEntitlement() {
+  const supportsHubAuth = isTauri && !isMobilePlatform();
   const [entitlementStatus, setEntitlementStatus] = useState<"checking" | "allowed" | "locked">(
-    isTauri ? "checking" : "allowed"
+    supportsHubAuth ? "checking" : "allowed"
   );
   const [requestedBrowser, setRequestedBrowser] = useState(false);
-  const [isPremium, setIsPremium] = useState(isTauri);
+  const [isPremium, setIsPremium] = useState(supportsHubAuth);
   const [entitlementDebug, setEntitlementDebug] = useState<string>("");
   const [launchToken, setLaunchToken] = useState<LaunchToken | null>(null);
 
   const refreshEntitlement = async () => {
-    if (!isTauri) {
+    if (!supportsHubAuth) {
       setEntitlementStatus("allowed");
       setIsPremium(true);
       return;
@@ -54,28 +61,33 @@ export function useEntitlement() {
 
   // Refresh every 5 minutes
   useEffect(() => {
-    if (!isTauri) return;
+    if (!supportsHubAuth) return;
     const interval = window.setInterval(() => {
       refreshEntitlement();
     }, 5 * 60 * 1000);
     return () => window.clearInterval(interval);
-  }, [isTauri]);
+  }, [supportsHubAuth]);
 
   // Auto-open browser when locked
   useEffect(() => {
+    if (!supportsHubAuth) return;
     if (entitlementStatus !== "locked" || requestedBrowser) return;
     setRequestedBrowser(true);
     handleOpenAppBrowser();
-  }, [entitlementStatus, requestedBrowser]);
+  }, [entitlementStatus, requestedBrowser, supportsHubAuth]);
 
   // Web tier detection
   useEffect(() => {
-    if (isTauri) {
+    if (supportsHubAuth) {
       setIsPremium(true);
       return;
     }
-    const params = new URLSearchParams(window.location.search);
-    setIsPremium(params.get("tier") === "premium");
+    if (!isTauri) {
+      const params = new URLSearchParams(window.location.search);
+      setIsPremium(params.get("tier") === "premium");
+      return;
+    }
+    setIsPremium(true);
   }, []);
 
   // Dev HMR setup
@@ -99,7 +111,7 @@ export function useEntitlement() {
     ? launchToken.avatarPath.replace(/\\/g, "/")
     : null;
   const canUseLocalAvatar =
-    isTauri &&
+    supportsHubAuth &&
     typeof window !== "undefined" &&
     (window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost");
   const avatarUrl =

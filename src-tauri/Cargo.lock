@@ -1043,6 +1043,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "tempfile",
  "windows 0.54.0",
  "winreg",
 ]
