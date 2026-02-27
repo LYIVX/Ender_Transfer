@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@fontsource/space-grotesk": "^5.2.6",
+    "@supabase/supabase-js": "^2.45.4",
     "@tauri-apps/api": "^1.5.0",
     "@enderfall/runtime": "workspace:*",
     "@enderfall/ui": "workspace:*",

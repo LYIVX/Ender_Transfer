@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/tauri";
 import {
-  isEntitledForApp,
+  readAuthOverrideTokens,
+  readSharedAuthOverrideTokens,
   openAppBrowser,
-  refreshLaunchToken,
-  type LaunchToken,
 } from "@enderfall/runtime";
 import { isTauri, appId } from "../constants";
+import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import { openLink } from "../utils";
 
 const isMobilePlatform = () => {
@@ -23,7 +22,9 @@ export function useEntitlement() {
   const [requestedBrowser, setRequestedBrowser] = useState(false);
   const [isPremium, setIsPremium] = useState(supportsHubAuth);
   const [entitlementDebug, setEntitlementDebug] = useState<string>("");
-  const [launchToken, setLaunchToken] = useState<LaunchToken | null>(null);
+  const [displayName, setDisplayName] = useState("Account");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [avatarUrlFallback, setAvatarUrlFallback] = useState<string | null>(null);
 
   const refreshEntitlement = async () => {
     if (!supportsHubAuth) {
@@ -31,18 +32,68 @@ export function useEntitlement() {
       setIsPremium(true);
       return;
     }
-    const token = await refreshLaunchToken(appId);
-    console.log("[Ender Transfer] launch token", token);
-    setLaunchToken(token);
-    const allowed = isEntitledForApp(token, appId);
+    if (!isSupabaseConfigured || !supabase) {
+      setEntitlementStatus("locked");
+      setIsPremium(false);
+      setEntitlementDebug("supabase not configured");
+      return;
+    }
+
+    const localTokens = readAuthOverrideTokens();
+    const sharedTokens = await readSharedAuthOverrideTokens();
+    const tokens = localTokens ?? sharedTokens;
+    if (tokens?.access_token && tokens.refresh_token) {
+      await supabase.auth.setSession({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      });
+    }
+
+    const { data: userData } = await supabase.auth.getUser();
+    const user = userData.user;
+    if (!user) {
+      setEntitlementStatus("locked");
+      setIsPremium(false);
+      setEntitlementDebug("no supabase session");
+      setDisplayName("Account");
+      setAvatarUrl(null);
+      setAvatarUrlFallback(null);
+      return;
+    }
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("display_name,username,avatar_url,is_admin")
+      .eq("id", user.id)
+      .maybeSingle<{
+        display_name?: string | null;
+        username?: string | null;
+        avatar_url?: string | null;
+        is_admin?: boolean | null;
+      }>();
+
+    const { data: entitlements } = await supabase
+      .from("entitlements")
+      .select("app_id,active")
+      .eq("user_id", user.id)
+      .eq("active", true);
+
+    const entitled = (entitlements ?? []).some(
+      (entry) => entry.app_id === appId || entry.app_id === "all-apps"
+    );
+    const allowed = (profile?.is_admin ?? false) || entitled;
     setEntitlementStatus(allowed ? "allowed" : "locked");
     setIsPremium(allowed);
-    const now = Date.now();
-    const expires = token?.expiresAt ?? 0;
-    const debug = token
-      ? `token ${token.appId} exp ${new Date(expires).toLocaleString()} (${expires - now}ms)`
-      : "no token found";
+    const debug = `user=${user.id} admin=${profile?.is_admin ? "yes" : "no"} entitled=${entitled ? "yes" : "no"}`;
     setEntitlementDebug(debug);
+    const userMeta = (user.user_metadata ?? {}) as Record<string, unknown>;
+    const fallbackName =
+      (userMeta.full_name as string | undefined) ??
+      (userMeta.username as string | undefined) ??
+      (user.email ? user.email.split("@")[0] : "Account");
+    setDisplayName(profile?.display_name ?? profile?.username ?? fallbackName ?? "Account");
+    setAvatarUrl(profile?.avatar_url ?? (userMeta.avatar_url as string | null | undefined) ?? null);
+    setAvatarUrlFallback(null);
   };
 
   const handleOpenAppBrowser = async () => {
@@ -64,7 +115,7 @@ export function useEntitlement() {
     if (!supportsHubAuth) return;
     const interval = window.setInterval(() => {
       refreshEntitlement();
-    }, 5 * 60 * 1000);
+    }, 15 * 1000);
     return () => window.clearInterval(interval);
   }, [supportsHubAuth]);
 
@@ -103,26 +154,10 @@ export function useEntitlement() {
     };
   }, []);
 
-  // Derived display values
-  const displayName =
-    launchToken?.displayName || launchToken?.email?.split("@")[0] || "Account";
-  const rawAvatarUrl = launchToken?.avatarUrl ?? null;
-  const normalizedAvatarPath = launchToken?.avatarPath
-    ? launchToken.avatarPath.replace(/\\/g, "/")
-    : null;
-  const canUseLocalAvatar =
-    supportsHubAuth &&
-    typeof window !== "undefined" &&
-    (window.location.protocol === "tauri:" || window.location.hostname === "tauri.localhost");
-  const avatarUrl =
-    canUseLocalAvatar && normalizedAvatarPath ? convertFileSrc(normalizedAvatarPath) : rawAvatarUrl;
-  const avatarUrlFallback = canUseLocalAvatar && normalizedAvatarPath ? rawAvatarUrl : null;
-
   return {
     entitlementStatus,
     isPremium,
     entitlementDebug,
-    launchToken,
     displayName,
     avatarUrl,
     avatarUrlFallback,
