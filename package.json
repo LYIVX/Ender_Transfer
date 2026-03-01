@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "dev:web": "vite",
-    "build:web": "vite build",
+    "build:web": "pnpm --filter @enderfall/ui build && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "predev": "npm run ensure:tauri",
     "prebuild": "npm run ensure:tauri",
